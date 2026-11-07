@@ -26,15 +26,70 @@ paths:
       responses:
         '202': { description: Scan started }
     get:
-      summary: Devices found by the last scan
+      summary: State and results of the last scan
       responses:
         '200':
           description: OK
           content:
             application/json:
               schema:
-                type: array
-                items: { $ref: '#/components/schemas/BleDevice' }
+                type: object
+                properties:
+                  scanning: { type: boolean }
+                  devices:
+                    type: array
+                    items: { $ref: '#/components/schemas/BleDevice' }
+  /wifi:
+    get:
+      summary: Network state (access-point or home-network mode). The password is never returned.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Wifi' }
+    put:
+      summary: Save the home Wi-Fi network; the gateway restarts and joins it
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ssid]
+              properties:
+                ssid: { type: string, minLength: 1, maxLength: 32 }
+                password: { type: string, description: Empty (open network) or 8-63 characters }
+      responses:
+        '202': { description: Saved, restarting }
+        '422': { description: Invalid SSID or password length }
+    delete:
+      summary: Forget the saved network; the gateway restarts in access-point mode
+      responses:
+        '202': { description: Restarting }
+  /wifi/scan:
+    post:
+      summary: Start a Wi-Fi network scan
+      responses:
+        '202': { description: Scan started }
+    get:
+      summary: State and results of the last Wi-Fi scan
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  scanning: { type: boolean }
+                  networks:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        ssid: { type: string }
+                        rssi: { type: integer }
+                        secure: { type: boolean }
   /device:
     get:
       summary: Selected pool device (connection state, model, firmware)
@@ -101,20 +156,32 @@ components:
         uptimeSeconds: { type: integer }
         wifiRssi: { type: integer }
         bleConnected: { type: boolean }
+        scanning: { type: boolean }
+    Wifi:
+      type: object
+      properties:
+        mode: { type: string, enum: [ap, sta] }
+        connected: { type: boolean }
+        ssid: { type: string, description: Joined network (sta mode) }
+        savedSsid: { type: string, description: Network stored in flash, if any }
+        ip: { type: string }
+        apSsid: { type: string, description: First-connection access point name (ap mode) }
+        hostname: { type: string, example: indygo-gateway.local }
     BleDevice:
       type: object
       properties:
         address: { type: string }
         name: { type: string }
         rssi: { type: integer }
-        family: { type: string, enum: [pooltech, sterilor_evo, unknown] }
+        family: { type: string, enum: [pooltech, sterilor_evo, solem_ipx, unknown] }
+        services: { type: string, description: Comma-separated advertised service UUIDs }
+        manufacturerData: { type: string, description: Advertised manufacturer data, hex }
     Device:
       type: object
       properties:
-        connected: { type: boolean }
-        family: { type: string }
-        model: { type: string }
-        firmware: { type: string }
+        address: { type: string, description: Selected BLE address, empty if none }
+        name: { type: string }
+        connected: { type: boolean, description: Always false until the BLE connection is implemented }
     Status:
       type: object
       description: Fields depend on the device model; absent when not supported.

@@ -21,7 +21,7 @@ no cloud account, no login.
 |------|---------|
 | `docs/` | Protocol notes, architecture, roadmap |
 | `api/openapi.yaml` | **Draft** REST API for third-party apps (the gateway's contract) |
-| `firmware/` | ESP32 firmware (not started yet) |
+| `firmware/` | ESP32 firmware: first-connection access point, Wi-Fi + Bluetooth-scan web menus (see its README) |
 
 ## Documentation
 

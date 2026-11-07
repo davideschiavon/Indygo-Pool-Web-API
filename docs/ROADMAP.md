@@ -18,7 +18,9 @@ on hardware · ⬜ not started
 ## Milestones
 
 1. **M0 – Research** (current): document the protocol, collect real device data.
-2. **M1 – BLE read-only**: ESP32 scans, connects, reads status/measurements, prints to serial.
+   - **M1a – Discovery + onboarding** (code written, compiles, awaiting hardware test): first-connection
+     access point, Wi-Fi setup menu, BLE scan menu, device selection. See [../firmware/README.md](../firmware/README.md).
+2. **M1 – BLE read-only**: ESP32 connects to the selected device, reads status/measurements.
 3. **M2 – Web UI + REST (read-only)**: implement `api/openapi.yaml` read endpoints.
 4. **M3 – Write support**: setpoints / modes, behind an explicit opt-in flag and safety limits.
 5. **M4 – Integrations**: Home Assistant (MQTT discovery), example clients.
