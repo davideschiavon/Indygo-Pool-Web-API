@@ -28,7 +28,7 @@
 #define BLE_AUTH_KEY_HEX ""
 #endif
 
-#define FIRMWARE_VERSION "0.7.1-m1a"
+#define FIRMWARE_VERSION "0.8.0-m1a"
 #define HOSTNAME "indygo-gateway"
 #define AP_PASSWORD "indygo-setup"  // default password of the first-connection access point
 #define STA_CONNECT_TIMEOUT_MS 15000
@@ -62,7 +62,20 @@ static BLEScan *bleScan = nullptr;
 static WebServer server(80);
 static DNSServer dnsServer;
 static Preferences prefs;
-static String selAddress, selName;
+static String selAddress, selName, selFamily;
+static int selAddrType = 0;
+
+// Shared BLE session state (declared early: used by both the plain device-selection handlers below and the
+// developer tools / real device control further down). See docs/ble-auth.md.
+static BLEClient *devClient = nullptr;
+static volatile bool devLinked = false;
+static String lastAuthAddress;          // last authenticated address...
+static uint8_t lastAuthNonce[16];       // ...and the nonce used for it (RAM only, cleared on disconnect/reboot)
+static bool lastAuthNonceValid = false;
+static bool notifySubscribed = false;   // shared between the raw BLE explorer and real device control below
+static volatile bool notifyPending = false;
+static uint8_t notifyBuf[244];
+static size_t notifyLen = 0;
 
 static bool apMode = false;
 static String apSsid;
@@ -90,12 +103,17 @@ static struct {
 static String classify(const String &name, const String &services) {
   if (name.startsWith("GEN_")) return "pooltech";
   if (name.startsWith("EVO_")) return "sterilor_evo";
+  if (name.startsWith("LRPC")) return "pool_command_vs2";  // confirmed on a real device, see docs/ble-auth.md
   String s = services;
   s.toLowerCase();
   // 84A4000x-C06B-4D49-87BC-EDBBAE1F9EAB = generic Solem IPX service (x = variant index)
   if (s.indexOf("84a4000") >= 0 && s.indexOf("-c06b-4d49-87bc-edbbae1f9eab") >= 0) return "solem_ipx";
+  if (s.indexOf("91d50001-1040-4f54-95b2-5fc31be56385") >= 0) return "pool_command_vs2";
   return "unknown";
 }
+
+// Real BLE control is implemented (docs/ble-auth.md) only for this family so far.
+static bool familySupportsRealControl(const String &family) { return family == "pool_command_vs2"; }
 
 static String toHex(const String &raw) {
   String out;
@@ -190,8 +208,24 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
  <p class="muted">The product families offered by the vendor app. Entries marked <b>Preview</b> have a demo panel (turn on Demo mode on the Status page); the others are listed but not supported yet.</p>
  <div id="cat" class="muted">Loading...</div></div></section>
 
-<section id="pool" class="hide"><div class="card"><h3>Filtration</h3>
- <div id="nodemo-pool" class="muted hide">Demo mode only for now: turn it on from the Status page.</div>
+<section id="pool" class="hide">
+ <div id="real-pool" class="card hide" style="border:2px solid #b33">
+  <h3 style="color:#b33">REAL control - acts on your actual equipment</h3>
+  <p class="muted" id="rp-state">Loading...</p>
+  <button class="btn" onclick="realStatus('rp')">Refresh status</button>
+  <h4>Manual ON (starts the filtration pump)</h4>
+  <label>Duration, seconds</label><input id="rp-dur" type="number" value="30" min="1" max="86400">
+  <label>Speed</label><select id="rp-speed"><option>1</option><option selected>2</option><option>3</option></select>
+  <p><button class="btn" onclick="realCmd('rp',{command:'manualOn',index:0,duration:+$('rp-dur').value,speed:+$('rp-speed').value})">Start pump</button>
+  <button class="btn alt" onclick="realCmd('rp',{command:'stopManualCommand',index:0})">Stop / back to auto</button></p>
+  <p>Boost: <button class="btn" onclick="realCmd('rp',{command:'boost',index:0,boostDuration:86400})">24 h</button>
+  <button class="btn" onclick="realCmd('rp',{command:'boost',index:0,boostDuration:172800})">48 h</button></p>
+  <p class="muted" id="rp-msg"></p>
+  <p class="muted">Only manualOn, stopManualCommand and boost have been exercised against real hardware so far
+  (see docs/ble-auth.md). BLE range matters: if a command fails, try moving the gateway closer.</p>
+ </div>
+ <div class="card"><h3>Filtration (preview / schedule editor)</h3>
+ <div id="nodemo-pool" class="muted hide">Demo mode only: turn it on from the Status page, or use the REAL box above for your actual device.</div>
  <div id="pool-body">
  <div id="pl-state" class="muted">Loading...</div>
  <p><button class="btn alt" onclick="filt({mode:'off'})">OFF</button>
@@ -211,12 +245,25 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
  Modes follow the manufacturer's manual. Schedules are stored but not evaluated in this preview.</p></div></div></section>
 
 <section id="aux" class="hide"><div class="card"><h3>Auxiliaries (AUX1 / AUX2)</h3>
- <div id="nodemo-aux" class="muted hide">Demo mode only for now: turn it on from the Status page.</div>
+ <div id="nodemo-aux" class="muted hide">Demo mode only for now: turn it on from the Status page. Use the Lighting page's REAL box for a real auxiliary configured as lighting.</div>
  <div id="aux-body"></div>
  <p class="muted">Each auxiliary has its own modes by equipment type. Starting a robot forces filtration; treatment equipment only runs while filtration runs. The heat pump is not supported yet.</p></div></section>
 
-<section id="lighting" class="hide"><div class="card"><h3>Lighting</h3>
- <div id="nodemo-lighting" class="muted hide">Demo mode only for now: turn it on from the Status page.</div>
+<section id="lighting" class="hide">
+ <div id="real-light" class="card hide" style="border:2px solid #b33">
+  <h3 style="color:#b33">REAL control - acts on your actual equipment</h3>
+  <p class="muted">Pick which output your lights are wired to (see your installation's AUX1/AUX2 wiring).</p>
+  <label>Output</label><select id="rl-idx"><option value="1">AUX1</option><option value="2">AUX2</option></select>
+  <p><button class="btn" onclick="realCmd('rl',{command:'manualOn',index:+$('rl-idx').value,duration:3600})">Light ON (1 h)</button>
+  <button class="btn alt" onclick="realCmd('rl',{command:'stopManualCommand',index:+$('rl-idx').value})">Light OFF</button>
+  <button class="btn" onclick="realCmd('rl',{command:'colorChange',index:+$('rl-idx').value})">Next colour (pulse)</button></p>
+  <div id="rl-pal"></div>
+  <p class="muted" id="rl-msg"></p>
+  <p class="muted">Uses the same confirmed envelope as the filtration test; the colour/Seamaid action codes themselves
+  have not been individually fired at real hardware yet (see docs/ble-auth.md).</p>
+ </div>
+ <div class="card"><h3>Lighting (preview)</h3>
+ <div id="nodemo-lighting" class="muted hide">Demo mode only: turn it on from the Status page, or use the REAL box above for your actual device.</div>
  <div id="light-body">
  <div id="lt-state" class="muted">Loading...</div>
  <p><button class="btn" onclick="lightCmd('manualOn',{duration:3600})">Light ON (1 h)</button>
@@ -287,7 +334,25 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
 const $=id=>document.getElementById(id);let poll,wpoll;const T=['status','products','pool','aux','lighting','ble','settings','wifi','dev'];
 function tab(t){for(const s of T){$(s).classList.toggle('hide',s!==t);$('t-'+s).classList.toggle('on',s===t)}if(t==='status'){loadSel();loadNet();live()}if(t==='wifi')loadNet();if(t==='settings')loadCfg();if(t==='products')loadCat();if(t==='pool'||t==='aux'||t==='lighting')loadSim();if(t==='dev')loadDev()}
 async function j(u,o){const r=await fetch(u,o);if(!r.ok)throw new Error(r.status);return r.status===204?null:r.json()}
-async function loadSel(){const d=await j('/api/v1/device');$('sel').textContent=d.address?((d.name||'(no name)')+' - '+d.address):'None selected yet.'}
+let DEV={};
+async function loadSel(){const d=await j('/api/v1/device');DEV=d;$('sel').textContent=d.address?((d.name||'(no name)')+' - '+d.address+(d.supportsRealControl?' [real control available]':'')):'None selected yet.';applyRealGating()}
+function applyRealGating(){const real=!DEV.demo&&DEV.supportsRealControl;
+ $('real-pool').classList.toggle('hide',!real);$('real-light').classList.toggle('hide',!real);
+ $('nodemo-pool').classList.toggle('hide',DEV.demo);$('nodemo-aux').classList.toggle('hide',DEV.demo);$('nodemo-lighting').classList.toggle('hide',DEV.demo);
+ $('pool-body').classList.toggle('hide',!DEV.demo);$('light-body').classList.toggle('hide',!DEV.demo)}
+async function realStatus(p){const el=$(p+'-state')||$(p+'-msg');el.textContent='Reading status...';let d;try{d=await j('/api/v1/real/status')}catch(e){el.textContent='Error: '+e.message;return}
+ if(!d.available){el.textContent=d.reason;return}
+ if(d.error){el.textContent='Not reachable: '+d.error;return}
+ el.textContent='Connected and authenticated. Last status (raw, field layout not decoded yet): '+(d.rawHex||'-')+(d.warning?' - '+d.warning:'')}
+async function realCmd(p,o){const el=$(p+'-msg')||$(p+'-state');el.textContent='Sending...';let d;try{d=await j('/api/v1/commands',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(o)})}catch(e){el.textContent='Failed: '+e.message;return}
+ el.textContent=(d.acknowledged?'Acknowledged.':'Sent (no/unexpected ack).')+(d.note?' '+d.note:'')+(d.ackHex?' ['+d.ackHex+']':'')}
+const REAL_PALETTE=[["Hot white",227,"white"],["White",195,"white"],["Blue",35,"color"],["Lagoon",243,"color"],["Cyan",115,"color"],["Purple",51,"color"],["Magenta",251,"color"],["Pink",123,"color"],["Red",59,"color"],["Orange",225,"color"],["Green",97,"color"],["Favorite",33,"color"],["Light 25%",241,"level"],["Light 50%",113,"level"],["Light 75%",49,"level"],["Gradient",121,"program"],["Rainbow",57,"program"],["Parade",224,"program"],["Techno",96,"program"],["Horizon",32,"program"],["Random",240,"program"],["Magic",112,"program"]];
+function drawRealPalette(){const box=$('rl-pal');box.innerHTML='';let last='';
+ for(const [name,value,kind] of REAL_PALETTE){if(kind!==last){last=kind;const h=document.createElement('div');h.className='muted';h.style.marginTop='6px';h.textContent=kind;box.appendChild(h)}
+  const b=document.createElement('button');b.className='btn';b.style.cssText='margin:3px;'+(CSS[name]?'background:'+CSS[name]+';color:'+(['White','Hot white','Cyan','Pink','Favorite','Lagoon'].includes(name)?'#14232b':'#fff')+';border:1px solid #0003':'');
+  b.textContent=name;b.onclick=()=>realCmd('rl',{command:'colorChangeCCEI',index:+$('rl-idx').value,mode:value});box.appendChild(b)}
+ const h2=document.createElement('div');h2.className='muted';h2.style.marginTop='6px';h2.textContent='Seamaid';box.appendChild(h2);
+ for(const [n,v] of[['Change colour',16],['Save colour',48],['Reset',32]]){const b=document.createElement('button');b.className='btn';b.style.margin='3px';b.textContent=n;b.onclick=()=>realCmd('rl',{command:'colorChangeSeamaid',index:+$('rl-idx').value,mode:v});box.appendChild(b)}}
 async function loadNet(){const w=await j('/api/v1/wifi');
  const t=w.mode==='ap'?'First-connection access point "'+w.apSsid+'" ('+w.ip+'). No home network joined yet.':'Connected to "'+w.ssid+'" - '+w.ip+' ('+w.hostname+')';
  $('net').textContent=t;$('wmode').textContent=t;if(w.savedSsid&&!$('ssid').value)$('ssid').value=w.savedSsid}
@@ -299,7 +364,7 @@ async function refresh(){const d=await j('/api/v1/ble/scan');$('state').textCont
   tr.innerHTML='<td></td><td></td><td></td><td><span class="tag"></span></td><td><button class="btn">Select</button> <button class="btn alt">Explore</button></td>';
   const c=tr.children;c[0].textContent=x.name||'(no name)';c[1].textContent=x.address;c[2].textContent=x.rssi;
   c[3].firstChild.textContent=x.family;c[3].firstChild.classList.add(x.family);
-  c[4].firstChild.onclick=async()=>{await j('/api/v1/device',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({address:x.address,name:x.name})});tab('status')};
+  c[4].firstChild.onclick=async()=>{await j('/api/v1/device',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({address:x.address,name:x.name,addrType:x.addrType||0,family:x.family})});tab('status')};
   c[4].children[1].onclick=()=>{$('ble-addr').value=x.address;$('ble-type').value=x.addrType||0;tab('dev')};$('rows').appendChild(tr)}
  if(!d.scanning){clearInterval(poll);$('scan').disabled=false}}
 async function wscan(){$('wscan').disabled=true;$('wstate').textContent='Scanning...';await j('/api/v1/wifi/scan',{method:'POST'});wpoll=setInterval(wrefresh,1500)}
@@ -353,8 +418,7 @@ function drawAux(d){const box=$('aux-body');box.innerHTML='';
    w.appendChild(cb);w.appendChild(document.createTextNode('Cover mode: while the cover is closed, run at '));const r=document.createElement('input');r.type='number';r.min=0;r.max=60;r.value=a.shutterRate;r.style.cssText='width:70px;margin:0 6px';r.onchange=()=>auxPut(n,{shutterRate:+r.value});w.appendChild(r);w.appendChild(document.createTextNode('min per hour'));c.appendChild(w)}
   else if(a.mode==='auto'){const hh=document.createElement('div');hh.className='muted';hh.textContent='Time ranges (up to 8)';c.appendChild(hh);const rb=document.createElement('div');c.appendChild(rb);editRanges(rb,a.ranges,false,rows=>auxPut(n,{ranges:rows}))}
   box.appendChild(c)}}
-async function loadSim(){let d=null;try{d=await j('/api/v1/sim')}catch(e){}SIM=d;
- for(const k of['pool','aux','lighting']){$('nodemo-'+k).classList.toggle('hide',!!d);if($(k+'-body'))$(k+'-body').classList.toggle('hide',!d)}
+async function loadSim(){applyRealGating();let d=null;try{d=await j('/api/v1/sim')}catch(e){}SIM=d;
  if(!d)return;const p=d.pool;
  let st='Mode: '+p.mode.toUpperCase();if(p.mode==='on')st+=' at speed '+p.speed+(p.remainingSeconds?' ('+fmt(p.remainingSeconds)+' left)':'');
  if(p.mode==='auto')st+=' ('+p.autoKind+')'+(p.boost.active?' - BOOST, '+fmt(p.boost.remainingSeconds)+' left':'');
@@ -411,7 +475,7 @@ async function loadCfg(){let c=null;try{c=await j('/api/v1/config')}catch(e){}
  $('c-ph').value=c.phSetpoint;$('c-orp').value=c.orpSetpoint;$('c-pct').value=c.productionPercent;$('c-mode').value=c.mode;$('c-boost').checked=c.boost;$('c-winter').checked=c.winterMode}
 async function saveCfg(){try{await j('/api/v1/config',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({phSetpoint:parseFloat($('c-ph').value),orpSetpoint:parseInt($('c-orp').value),productionPercent:parseInt($('c-pct').value),mode:$('c-mode').value,boost:$('c-boost').checked,winterMode:$('c-winter').checked})});$('cfgstate').textContent='Applied.'}
  catch(e){$('cfgstate').textContent='Rejected: value outside the allowed range.'}setTimeout(()=>$('cfgstate').textContent='',3000);live()}
-j('/api/v1/gateway').then(g=>$('ver').textContent='v'+g.firmware);loadSel();loadNet();loadDemo();live();setInterval(()=>{if(!$('status').classList.contains('hide'))live()},3000);
+j('/api/v1/gateway').then(g=>$('ver').textContent='v'+g.firmware);loadSel();loadNet();loadDemo();live();drawRealPalette();setInterval(()=>{if(!$('status').classList.contains('hide'))live()},3000);
 </script></body></html>)HTML";
 
 static void sendJson(int code, JsonDocument &doc) {
@@ -469,11 +533,14 @@ static void handleDeviceGet() {
     doc["family"] = "demo";
     doc["connected"] = true;
     doc["demo"] = true;
+    doc["supportsRealControl"] = false;
   } else {
     doc["address"] = selAddress;
     doc["name"] = selName;
-    doc["connected"] = false;  // connection to the pool device is not implemented yet
+    doc["family"] = selFamily;
+    doc["connected"] = devLinked;
     doc["demo"] = false;
+    doc["supportsRealControl"] = familySupportsRealControl(selFamily);
   }
   sendJson(200, doc);
 }
@@ -573,10 +640,18 @@ static void handleDevicePut() {
     server.send(400, "application/json", "{\"error\":\"body must be {\\\"address\\\":\\\"..\\\"}\"}");
     return;
   }
+  if (devClient && devClient->isConnected()) devClient->disconnect();
+  devLinked = false;
+  lastAuthNonceValid = false;
+  notifySubscribed = false;
   selAddress = in["address"].as<String>();
   selName = in["name"] | "";
+  selAddrType = in["addrType"] | 0;
+  selFamily = in["family"] | "";
   prefs.putString("addr", selAddress);
   prefs.putString("name", selName);
+  prefs.putInt("addrType", selAddrType);
+  prefs.putString("family", selFamily);
   server.send(204);
 }
 
@@ -846,12 +921,12 @@ static void handleAuxPut(int i) {
 
 // POST /api/v1/commands: same JSON shape the vendor app passes to its sendManualCommand().
 static void handleCommand() {
-  if (!demoMode) return noDevice();
   JsonDocument in;
   if (deserializeJson(in, server.arg("plain")) || !in["command"].is<const char *>()) {
     server.send(400, "application/json", "{\"error\":\"body must contain a \\\"command\\\"\"}");
     return;
   }
+  if (!demoMode) { handleRealCommand(in); return; }
   simTick();
   String cmd = in["command"].as<String>();
   int index = in["index"] | 0;
@@ -905,9 +980,14 @@ static void handleCommand() {
 // ---------- developer tools: password, OTA update, BLE explorer ----------
 // Everything here needs the developer password (header X-Dev-Password). Until a password is set, the tools are
 // disabled. BLE writes are locked by default and must be enabled for a limited time; every write is logged.
-static String lastAuthAddress;          // BLE session auth (docs/ble-auth.md): last authenticated address...
-static uint8_t lastAuthNonce[16];       // ...and the nonce used for it (RAM only, cleared on disconnect/reboot)
-static bool lastAuthNonceValid = false;
+static void notifyCallback(BLERemoteCharacteristic *ch, uint8_t *d, size_t n, bool) {
+  devLogAdd('N', ch->getUUID().toString(), d, n);
+  if (n <= sizeof(notifyBuf)) {
+    memcpy(notifyBuf, d, n);
+    notifyLen = n;
+    notifyPending = true;
+  }
+}
 static String devPwHash;                // SHA-256 (hex) of the developer password; empty = tools disabled
 static uint32_t writeEnabledUntil = 0;  // BLE writes allowed until this millis() value (0 = locked)
 
@@ -940,8 +1020,6 @@ static bool writesAllowed() { return writeEnabledUntil && (int32_t)(writeEnabled
 struct DevLogEntry { uint32_t seq = 0, ms = 0; char dir = ' '; String uuid, hex; };
 static DevLogEntry devLog[DEV_LOG_SIZE];
 static uint32_t devLogSeq = 0;
-static BLEClient *devClient = nullptr;
-static volatile bool devLinked = false;
 
 static void devLogAdd(char dir, const String &uuid, const uint8_t *d, size_t n) {
   DevLogEntry &e = devLog[devLogSeq % DEV_LOG_SIZE];
@@ -1113,7 +1191,7 @@ static void handleDevBleSubscribe() {
   BLERemoteCharacteristic *c = devFindChar(in);
   if (!c) { server.send(404, "application/json", "{\"error\":\"not connected or characteristic not found\"}"); return; }
   if (!c->canNotify() && !c->canIndicate()) { server.send(422, "application/json", "{\"error\":\"characteristic cannot notify\"}"); return; }
-  c->registerForNotify([](BLERemoteCharacteristic *ch, uint8_t *d, size_t n, bool) { devLogAdd('N', ch->getUUID().toString(), d, n); });
+  c->registerForNotify(notifyCallback);
   server.send(204);
 }
 
@@ -1189,6 +1267,20 @@ static bool authKeyBytes(uint8_t out[16]) {
 // counter per call = the nonce itself, matching the vendor app's per-message Cipher usage). Pure computation,
 // no BLE traffic: used to prepare a command before /dev/ble/write, or to decrypt a notification already in
 // the log. Needs a successful /dev/ble/auth first (the nonce is never accepted as an input - only cached).
+// AES-128-CTR-NoPadding, fresh counter = nonce for every call (matches the vendor app's per-message Cipher
+// usage, confirmed against a real device - see docs/ble-auth.md). Same transform both directions.
+static void ctrCrypt(const uint8_t key[16], const uint8_t nonce[16], const uint8_t *in, size_t n, uint8_t *out) {
+  uint8_t counter[16], stream[16];
+  memcpy(counter, nonce, 16);
+  size_t ncOff = 0;
+  memset(stream, 0, 16);
+  mbedtls_aes_context aes;
+  mbedtls_aes_init(&aes);
+  mbedtls_aes_setkey_enc(&aes, key, 128);
+  mbedtls_aes_crypt_ctr(&aes, n, &ncOff, counter, stream, in, out);
+  mbedtls_aes_free(&aes);
+}
+
 static void handleDevBleCrypto() {
   if (!devAuth()) return;
   if (!lastAuthNonceValid) { server.send(409, "application/json", "{\"error\":\"no cached nonce - run /dev/ble/auth first\"}"); return; }
@@ -1208,15 +1300,8 @@ static void handleDevBleCrypto() {
     if (*end) { server.send(422, "application/json", "{\"error\":\"hex contains non-hex characters\"}"); return; }
     buf[i] = (uint8_t)v;
   }
-  uint8_t out[244], counter[16], stream[16];
-  memcpy(counter, lastAuthNonce, 16);
-  size_t ncOff = 0;
-  memset(stream, 0, 16);
-  mbedtls_aes_context aes;
-  mbedtls_aes_init(&aes);
-  mbedtls_aes_setkey_enc(&aes, key, 128);  // CTR mode always uses the encryption schedule, for both directions
-  mbedtls_aes_crypt_ctr(&aes, n, &ncOff, counter, stream, buf, out);
-  mbedtls_aes_free(&aes);
+  uint8_t out[244];
+  ctrCrypt(key, lastAuthNonce, buf, n, out);
   JsonDocument doc;
   doc["hex"] = hexOf(String((const char *)out, n));
   sendJson(200, doc);
@@ -1269,6 +1354,239 @@ static void handleDevBleAuth() {
   out["authenticated"] = true;
   out["reused"] = false;
   sendJson(200, out);
+}
+
+// ---------- real device control (non-dev, no password) ----------
+// Sends actual commands to the selected BLE device, confirmed working against a real POOL COMMAND VS2
+// (see docs/ble-auth.md): readPoolStatus and stopManualCommand were both sent encrypted and correctly
+// acknowledged. manualOn/boost/colour use the SAME confirmed envelope and the byte layouts documented in
+// docs/app-commands.md, but have not individually been fired at real hardware yet - BLE range/stability
+// can make a command fail to reach the device; failures here never pretend to have succeeded.
+// Only implemented for family "pool_command_vs2" (familySupportsRealControl); no dev password needed because
+// this is the gateway's intended normal function, not the raw explorer - but it only ever sends the specific,
+// range-checked commands below, never arbitrary bytes.
+#define REAL_SERVICE_UUID "91d50001-1040-4f54-95b2-5fc31be56385"
+#define REAL_AUTH_CHAR_UUID "91d50005-1040-4f54-95b2-5fc31be56385"
+#define REAL_CMD_CHAR_UUID "91d50002-1040-4f54-95b2-5fc31be56385"
+#define REAL_NOTIFY_CHAR_UUID "91d50003-1040-4f54-95b2-5fc31be56385"
+#define CMD_WR_POOL_MANUAL_COMMAND 0xB3
+
+static bool realConnectAndAuth(String &err) {
+  if (demoMode) { err = "demo mode is on"; return false; }
+  if (selAddress.isEmpty()) { err = "no device selected"; return false; }
+  if (!familySupportsRealControl(selFamily)) { err = "real control is not implemented yet for this device family"; return false; }
+  uint8_t key[16];
+  if (!authKeyBytes(key)) { err = "BLE_AUTH_KEY_HEX not configured on this gateway (see docs/ble-auth.md)"; return false; }
+  if (!devClient || !devClient->isConnected()) {
+    if (scanning) { bleScan->stop(); scanning = false; }
+    if (!devClient) {
+      devClient = BLEDevice::createClient();
+      devClient->setClientCallbacks(&devClientCb);
+    }
+#if defined(CONFIG_BLUEDROID_ENABLED)
+    bool ok = devClient->connect(BLEAddress(selAddress), (esp_ble_addr_type_t)selAddrType, 10000);
+#else
+    bool ok = devClient->connect(BLEAddress(selAddress), (uint8_t)selAddrType, 10000);
+#endif
+    if (!ok) { err = "could not connect (device out of range or busy)"; return false; }
+    devLinked = true;
+    lastAuthNonceValid = false;
+    notifySubscribed = false;
+  }
+  String addr = devClient->getPeerAddress().toString();
+  if (lastAuthNonceValid && lastAuthAddress == addr) return true;  // already authenticated earlier on this same link
+  BLERemoteService *svc = devClient->getService(BLEUUID(REAL_SERVICE_UUID));
+  BLERemoteCharacteristic *authc = svc ? svc->getCharacteristic(BLEUUID(REAL_AUTH_CHAR_UUID)) : nullptr;
+  if (!authc || !authc->canRead()) { err = "auth characteristic not found"; return false; }
+  String v = authc->readValue();
+  devLogAdd('R', authc->getUUID().toString(), (const uint8_t *)v.c_str(), v.length());
+  if (v.length() == AUTH_MARKER_LEN && memcmp(v.c_str(), AUTH_MARKER, AUTH_MARKER_LEN) == 0) {
+    err = "device reports already authenticated but this gateway has no session nonce for it; reconnecting should fix this";
+    return false;
+  }
+  if (v.length() != 16) { err = "unexpected nonce length"; return false; }
+  uint8_t resp[16];
+  mbedtls_aes_context aes;
+  mbedtls_aes_init(&aes);
+  mbedtls_aes_setkey_enc(&aes, key, 128);
+  mbedtls_aes_crypt_ecb(&aes, MBEDTLS_AES_ENCRYPT, (const uint8_t *)v.c_str(), resp);
+  mbedtls_aes_free(&aes);
+  if (!authc->canWrite() && !authc->canWriteNoResponse()) { err = "auth characteristic not writable"; return false; }
+  devLogAdd('W', authc->getUUID().toString(), resp, 16);
+  authc->writeValue(resp, 16, authc->canWrite());
+  memcpy(lastAuthNonce, v.c_str(), 16);
+  lastAuthAddress = addr;
+  lastAuthNonceValid = true;
+  return true;
+}
+
+static bool realEnsureSubscribed(String &err) {
+  if (notifySubscribed) return true;
+  BLERemoteService *svc = devClient->getService(BLEUUID(REAL_SERVICE_UUID));
+  BLERemoteCharacteristic *c = svc ? svc->getCharacteristic(BLEUUID(REAL_NOTIFY_CHAR_UUID)) : nullptr;
+  if (!c || (!c->canNotify() && !c->canIndicate())) { err = "notify characteristic not found"; return false; }
+  c->registerForNotify(notifyCallback);
+  notifySubscribed = true;
+  return true;
+}
+
+// Builds the raw (unencrypted) frame for a manual command, exactly as docs/app-commands.md documents it from
+// the vendor app's FrameManager.poolManualCommand(). index: 0 filtration, 1 AUX1, 2 AUX2 (assumption, shared
+// with demo mode). Returns false with `err` set on an unknown command or an out-of-range value.
+static bool buildManualFrame(const String &cmd, int index, JsonDocument &in, uint8_t out[16], size_t &outLen, String &err) {
+  auto put32be = [&](uint32_t v, uint8_t *p) { p[0] = (v >> 24) & 255; p[1] = (v >> 16) & 255; p[2] = (v >> 8) & 255; p[3] = v & 255; };
+  bool hasSpeed = in["speed"].is<int>();
+  int speed = in["speed"] | 2;
+  if (hasSpeed && (speed < 1 || speed > 3)) { err = "speed must be 1-3"; return false; }
+  out[0] = CMD_WR_POOL_MANUAL_COMMAND;
+  if (cmd == "manualOn") {
+    int dur = in["duration"] | 3600;
+    if (dur < 1 || dur > 86400) { err = "duration must be 1-86400 s"; return false; }
+    out[1] = hasSpeed ? 7 : 6; out[2] = 2; out[3] = (uint8_t)index;
+    put32be((uint32_t)dur, out + 4);
+    outLen = hasSpeed ? 9 : 8;
+    if (hasSpeed) out[8] = (uint8_t)speed;
+    return true;
+  }
+  if (cmd == "stopManualCommand") { out[1] = 2; out[2] = 1; out[3] = (uint8_t)index; outLen = 4; return true; }
+  if (cmd == "boost") {
+    int dur = in["boostDuration"] | 86400;
+    if (dur != 86400 && dur != 172800) { err = "boostDuration must be 86400 or 172800"; return false; }
+    out[1] = hasSpeed ? 7 : 6; out[2] = 3; out[3] = (uint8_t)index;
+    put32be((uint32_t)dur, out + 4);
+    outLen = hasSpeed ? 9 : 8;
+    if (hasSpeed) out[8] = (uint8_t)speed;
+    return true;
+  }
+  if (cmd == "pause") {
+    int days = in["pauseDurationInDays"] | 1;
+    if (days < 1 || days > 30) { err = "pauseDurationInDays must be 1-30"; return false; }
+    out[1] = 6; out[2] = 5; out[3] = (uint8_t)index;
+    put32be((uint32_t)days, out + 4);
+    outLen = 8;
+    return true;
+  }
+  if (cmd == "colorChange") { out[1] = 2; out[2] = 4; out[3] = (uint8_t)index; outLen = 4; return true; }
+  if (cmd == "colorChangeCCEI") {
+    int mode = in["mode"] | -1;
+    bool found = false;
+    for (const auto &c : CCEI_COLORS) if (c.value == mode) found = true;
+    if (!found) { err = "unknown CCEI value"; return false; }
+    out[1] = hasSpeed ? 7 : 6; out[2] = 9; out[3] = (uint8_t)index;
+    out[4] = 0; out[5] = (uint8_t)mode; out[6] = 0; out[7] = 96;
+    outLen = hasSpeed ? 9 : 8;
+    if (hasSpeed) out[8] = (uint8_t)speed;
+    return true;
+  }
+  if (cmd == "colorChangeSeamaid") {
+    int mode = in["mode"] | -1;
+    if (mode != 16 && mode != 32 && mode != 48) { err = "Seamaid mode must be 16, 32 or 48"; return false; }
+    out[1] = hasSpeed ? 7 : 6; out[2] = 10; out[3] = (uint8_t)index;
+    out[4] = (uint8_t)mode; out[5] = 0; out[6] = 0; out[7] = 0;
+    outLen = hasSpeed ? 9 : 8;
+    if (hasSpeed) out[8] = (uint8_t)speed;
+    return true;
+  }
+  if (cmd == "backwash") {
+    int dur = in["duration"] | 120;
+    if (dur < 10 || dur > 1800) { err = "duration must be 10-1800 s"; return false; }
+    out[1] = 6; out[2] = 11; out[3] = (uint8_t)index;
+    put32be((uint32_t)dur + 168099840UL, out + 4);
+    outLen = 8;
+    return true;
+  }
+  err = "command not supported for real control";
+  return false;
+}
+
+// Encrypts and sends one frame, waits up to 1.5 s for the device's acknowledgement notification, decrypts it.
+// Returns true once the frame was WRITTEN (even without an ack - the command may still have been applied;
+// `err` carries a note in that case). Returns false only when nothing reached the device.
+static bool realSendFrame(const uint8_t *frame, size_t len, uint8_t *ackOut, size_t &ackLen, bool &acked, String &err) {
+  if (!realConnectAndAuth(err)) return false;
+  if (!realEnsureSubscribed(err)) return false;
+  uint8_t key[16];
+  authKeyBytes(key);
+  uint8_t enc[16];
+  ctrCrypt(key, lastAuthNonce, frame, len, enc);
+  BLERemoteService *svc = devClient->getService(BLEUUID(REAL_SERVICE_UUID));
+  BLERemoteCharacteristic *c = svc ? svc->getCharacteristic(BLEUUID(REAL_CMD_CHAR_UUID)) : nullptr;
+  if (!c || (!c->canWrite() && !c->canWriteNoResponse())) { err = "command characteristic not found"; return false; }
+  notifyPending = false;
+  devLogAdd('W', c->getUUID().toString(), enc, len);
+  c->writeValue(enc, len, c->canWrite());
+  uint32_t t0 = millis();
+  while (!notifyPending && millis() - t0 < 1500) delay(20);
+  ackLen = 0;
+  acked = false;
+  if (!notifyPending) {
+    err = "sent, but no acknowledgement within 1.5s (link may be weak) - the command may or may not have been applied";
+    return true;
+  }
+  ctrCrypt(key, lastAuthNonce, notifyBuf, notifyLen, ackOut);
+  ackLen = notifyLen;
+  notifyPending = false;
+  acked = (ackLen > 0 && ackOut[0] == (uint8_t)(frame[0] + 1));
+  if (!acked) err = "unexpected acknowledgement";
+  return true;
+}
+
+static void handleRealCommand(JsonDocument &in) {
+  int index = in["index"] | 0;
+  if (index < 0 || index > 2) { server.send(422, "application/json", "{\"error\":\"index must be 0, 1 or 2\"}"); return; }
+  String cmd = in["command"].as<String>(), err;
+  uint8_t frame[16];
+  size_t frameLen;
+  if (!buildManualFrame(cmd, index, in, frame, frameLen, err)) {
+    server.send(422, "application/json", "{\"error\":\"" + err + "\"}");
+    return;
+  }
+  uint8_t ack[244];
+  size_t ackLen;
+  bool acked;
+  if (!realSendFrame(frame, frameLen, ack, ackLen, acked, err)) {
+    server.send(502, "application/json", "{\"error\":\"" + err + "\"}");
+    return;
+  }
+  JsonDocument out;
+  out["sent"] = true;
+  out["acknowledged"] = acked;
+  if (ackLen) out["ackHex"] = hexOf(String((const char *)ack, ackLen));
+  if (err.length()) out["note"] = err;
+  sendJson(200, out);
+}
+
+static void handleRealStatus() {
+  JsonDocument doc;
+  if (demoMode) { doc["available"] = false; doc["reason"] = "demo mode is on"; sendJson(200, doc); return; }
+  if (selAddress.isEmpty()) { doc["available"] = false; doc["reason"] = "no device selected"; sendJson(200, doc); return; }
+  if (!familySupportsRealControl(selFamily)) {
+    doc["available"] = false;
+    doc["reason"] = "real control is not implemented yet for this device family";
+    sendJson(200, doc);
+    return;
+  }
+  uint8_t frame[2] = {0xC7, 0x00};  // FrameManager.readPoolStatus()
+  uint8_t ack[244];
+  size_t ackLen;
+  bool acked;
+  String err;
+  if (!realSendFrame(frame, 2, ack, ackLen, acked, err)) {
+    doc["available"] = true;
+    doc["connected"] = false;
+    doc["error"] = err;
+    sendJson(200, doc);
+    return;
+  }
+  doc["available"] = true;
+  doc["connected"] = true;
+  doc["authenticated"] = true;
+  if (ackLen) {
+    doc["rawHex"] = hexOf(String((const char *)ack, ackLen));
+    doc["note"] = "field layout of this response is not decoded yet (see docs/app-commands.md); shown as raw bytes";
+  }
+  if (err.length()) doc["warning"] = err;
+  sendJson(200, doc);
 }
 
 static void handleWifiGet() {
@@ -1380,6 +1698,8 @@ void setup() {
   prefs.begin("indygo", false);
   selAddress = prefs.getString("addr", "");
   selName = prefs.getString("name", "");
+  selAddrType = prefs.getInt("addrType", 0);
+  selFamily = prefs.getString("family", "");
   demoMode = prefs.getBool("demo", false);
   devPwHash = prefs.getString("devpw", "");
   simInit();
@@ -1407,6 +1727,7 @@ void setup() {
   server.on("/api/v1/catalog", HTTP_GET, handleCatalog);
   server.on("/api/v1/sim", HTTP_GET, handleSim);
   server.on("/api/v1/commands", HTTP_POST, handleCommand);
+  server.on("/api/v1/real/status", HTTP_GET, handleRealStatus);
   server.on("/api/v1/filtration", HTTP_PUT, handleFiltrationPut);
   server.on("/api/v1/aux1", HTTP_PUT, []() { handleAuxPut(0); });
   server.on("/api/v1/aux2", HTTP_PUT, []() { handleAuxPut(1); });

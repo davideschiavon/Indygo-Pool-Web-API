@@ -173,7 +173,18 @@ paths:
       responses:
         '204': { description: Accepted }
         '422': { description: Unknown command, wrong state or value out of range }
+        '502': { description: Real send failed (not connected, no key configured, link dropped, ...) }
         '503': { description: Demo mode off and no device connected }
+  /real/status:
+    get:
+      summary: Read real device status over BLE (connects/authenticates on demand; no developer password needed)
+      description: |
+        For the selected device when its family supports real control (see GET /device). Returns the raw
+        decrypted status bytes; their field layout is not decoded yet (see docs/ble-auth.md), so no
+        measurement fields are fabricated.
+      responses:
+        '200':
+          description: 'Body {available, connected?, authenticated?, rawHex?, error?, warning?, reason?}'
   /filtration:
     put:
       summary: Set filtration mode and options (demo mode only). Fields are optional; an invalid field rejects the whole request.
@@ -569,7 +580,9 @@ components:
       properties:
         address: { type: string, description: Selected BLE address, empty if none }
         name: { type: string }
-        connected: { type: boolean, description: Always false until the BLE connection is implemented }
+        connected: { type: boolean }
+        family: { type: string }
+        supportsRealControl: { type: boolean, description: Whether this gateway can send real commands to the selected device's family (see docs/ble-auth.md) }
     Status:
       type: object
       description: |

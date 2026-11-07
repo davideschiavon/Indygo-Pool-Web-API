@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 ### Added
+- Firmware 0.8.0-m1a: real device control in the web UI (Filtration/Lighting), replacing the demo for a
+  recognised real device (family `pool_command_vs2`). `POST /api/v1/commands` now sends actual BLE commands
+  when demo mode is off; new `GET /api/v1/real/status`. Device classification recognises `LRPC*` names and the
+  product's service UUID. Confirmed working end to end against the real device (status read); starting the
+  pump for real has been attempted but not yet confirmed due to BLE range/link stability - see docs/ble-auth.md.
 - Firmware 0.7.1-m1a: `POST /api/v1/dev/ble/crypto` (AES-128-CTR encrypt/decrypt using the session nonce) to
   prepare/read encrypted BLE command frames. Used it to confirm, against a real POOL COMMAND VS2, that a read
   status command and a harmless write command (stopManualCommand) both round-trip correctly end to end -

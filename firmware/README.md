@@ -1,6 +1,6 @@
 # Firmware
 
-ESP32 firmware: BLE discovery + web UI + REST API. Current version: **0.7.1-m1a**
+ESP32 firmware: BLE discovery + web UI + REST API. Current version: **0.8.0-m1a**
 (`indygo_gateway/indygo_gateway.ino`). It finds and remembers your device but does **not** talk to it
 yet — that needs the protocol work in [../docs/ROADMAP.md](../docs/ROADMAP.md).
 
@@ -90,6 +90,17 @@ handshake (`POST /api/v1/dev/ble/auth`) if a local, git-ignored `ble_secrets.h` 
 the full pipeline is **confirmed working** - a read-status command and a harmless write command
 (`stopManualCommand`) were both sent encrypted and acknowledged correctly. Actually changing equipment state
 (e.g. starting the pump) is held back pending explicit owner go-ahead for each test. See the doc.
+
+## Real device control (replaces the demo for a supported device)
+
+For a device of family `pool_command_vs2` (the POOL COMMAND VS2/LRPC-VS2 confirmed in docs/ble-auth.md), the
+**Filtration** and **Lighting** pages show a red-bordered **REAL control** box instead of relying on the
+demo: manual ON/stop/boost for filtration, on/off/colour-pulse/CCEI/Seamaid for lighting (pick AUX1 or AUX2).
+These send actual encrypted BLE commands - no demo mode, no developer password. The schedule/mode editors
+below them remain demo-only (not yet validated byte-for-byte against real hardware). BLE range to the real
+device matters: a weak signal (worse than about -85 dBm in testing) can make a command fail to reach the
+device - the UI reports this honestly rather than pretending success. See
+[../docs/ble-auth.md](../docs/ble-auth.md) for exactly what has been confirmed.
 
 ## ESP32-P4 notes (Waveshare ESP32-P4-WIFI6-DEV-KIT)
 

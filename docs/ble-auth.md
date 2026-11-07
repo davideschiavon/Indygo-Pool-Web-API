@@ -67,10 +67,28 @@ usage) together with the existing read/write/auth endpoints:
    exact `02 01 00` (length, action=stop, output index=0).
 
 This is conclusive: the key, the nonce/CTR handling, and the command frame format are all correct, for both
-reading status and sending a write command that the device parses and acknowledges. What has **not** been
-tested yet is a command that actually changes the physical state of the equipment (e.g. `manualOn`, which
-would start the filtration pump) — that is deliberately held back pending the owner's explicit go-ahead for
-each such test, and the exact byte-level meaning of the status response fields above is not yet mapped.
+reading status and sending a write command that the device parses and acknowledges. The exact byte-level
+meaning of the status response fields above is not yet mapped.
+
+## Real device control is now in the web UI (firmware 0.8.0-m1a)
+
+The gateway's own (non-developer) API can now drive a real device of family `pool_command_vs2`: `GET
+/api/v1/device` reports `supportsRealControl`; `POST /api/v1/commands` and `GET /api/v1/real/status` connect,
+authenticate and send/read automatically, reusing the exact mechanism proved above — no developer password
+needed, because this is the gateway's intended normal function, not the raw explorer. It only ever sends the
+specific, range-checked commands in `buildManualFrame()` (manualOn, stopManualCommand, boost, colorChange,
+colorChangeCCEI, colorChangeSeamaid, pause, backwash), never arbitrary bytes.
+
+**Tested with the real endpoint (2026-11-07):** `GET /api/v1/real/status` connected, authenticated and read
+status end to end, returning `C8 0C 01 0F 0D 0F 00 03 00 03 00 00 00 00` (again `0xC7+1`). A `manualOn`
+attempt to actually start the pump was tried three times from the raw dev-explorer earlier and failed each
+time at the link-stability stage (see the BLE range note below) before any byte reached the device —
+confirmed safe (no false "success" was ever reported), not yet confirmed to actually start the pump.
+
+**BLE range matters a lot for this radio.** Signal to the real device has been observed between -64 and
+-93 dBm depending on gateway placement; anything past roughly -85 dBm made the link drop right after the
+auth write, before the next operation. Keep the gateway within a few metres of line-of-sight for reliable
+control.
 
 ## Responsible handling
 
