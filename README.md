@@ -26,6 +26,7 @@ no cloud account, no login.
 ## Documentation
 
 - [Roadmap and verification status](docs/ROADMAP.md)
+- [POOL COMMAND VS² manual summary](docs/pool-command-vs2.md)
 - [Commands in the vendor app and their transports](docs/app-commands.md)
 - [BLE protocol notes](docs/protocol-ble.md)
 - [Vendor Wi-Fi module local HTTP API (reference)](docs/protocol-wifi-local.md)

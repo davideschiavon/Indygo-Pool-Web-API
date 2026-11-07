@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 ### Added
+- docs/pool-command-vs2.md: summary of the POOL COMMAND VS² manual (hardware, 3-speed pump contacts, filtration
+  and auxiliary modes, Bluetooth/LRMB control). docs/app-commands.md: Aquagem Modbus register map (bus-relay path).
 - Firmware 0.4.0-m1a: Products menu (catalog of the app's product families), Pool and Lighting preview panels with
   the app's manual commands, CCEI/Seamaid colour values and filtration rules (demo mode). API: `/catalog`, `/sim`,
   `/commands`, `/pool`. The heat pump is deliberately left out for now.

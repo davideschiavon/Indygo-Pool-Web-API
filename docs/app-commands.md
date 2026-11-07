@@ -83,9 +83,30 @@ authentication/session handling still have to be extracted (open task; see ROADM
 ❓ "4 modes" in the project brief is most likely the heat pump's 4 modes and/or 4 power modes. To be confirmed
 against the owner's actual equipment.
 
+## 6. Aquagem pump on an "IPX bus relay" (Modbus RTU) - a different path
+
+The app also has an `aquagemPump` product: a **bus relay** talking **Modbus RTU** to the pump (preset "Aquagem",
+slave address 1, preset mode code 3; serial parameters not given in the preset). This is NOT how a pump wired
+to the POOL COMMAND VS² speed contacts is driven (see [pool-command-vs2](pool-command-vs2.md)); it is documented
+because it would allow a direct RS485 link from an ESP32 if the owner's pump exposes it.
+
+| Register | Name in preset | Access | Meaning (key) |
+|---------:|----------------|--------|---------------|
+| 3001 | RUNNING_CAPACITY_SETTING | write FC16 / read FC04 | speed percentage (`speedPercentage`), app slider 30-100 % in 5 % steps |
+| 2001 | ERROR_CODE | read FC04 | `errorCode` (bit field; 16 alarm types: communication error, no-water protection, overload, ...) |
+| 2002 | FREQUENCY_INVENTER | read FC04 | `runningState` |
+| 2003 | RUNNING_CAPACITY | read FC04 | `runningCapacity` |
+| 2004 | POWER | read FC04 | `power` |
+| 2007 | POWER_CONSUMPTION | read FC04 | `powerConsumption` (scaled by 1/1000) |
+| 2008 | MODE_CODE | read FC04 | `modeCode` |
+| 2009 | SOFWARE_VERSION | read FC04 | `softwareVersion` |
+
+Register numbering (0- or 1-based) and the pump's own serial settings are unverified.
+
 ## Open questions
 
-- [ ] Which exact products does the owner have (heat pump model, light controller, connector)?
+- [x] Owner's equipment: POOL COMMAND VS² (LRPC) with an Aquagem IP20 filtration pump (3-speed contacts), per the owner.
+- [ ] Is an LRMB antenna present? Which lighting/auxiliary equipment is on AUX1/AUX2?
 - [ ] Does the heat pump accept local control (BLE/Wi-Fi), or is it cloud-only?
 - [ ] Module-type BLE UUIDs, frame header and authentication for the manual commands.
 - [ ] Units/limits for `manualDuration`, meaning of colour `mode` numbers per spotlight type.
