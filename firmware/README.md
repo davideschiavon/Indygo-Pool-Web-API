@@ -1,6 +1,6 @@
 # Firmware
 
-ESP32 firmware: BLE discovery + web UI + REST API. Current version: **0.3.0-m1a**
+ESP32 firmware: BLE discovery + web UI + REST API. Current version: **0.4.0-m1a**
 (`indygo_gateway/indygo_gateway.ino`). It finds and remembers your device but does **not** talk to it
 yet — that needs the protocol work in [../docs/ROADMAP.md](../docs/ROADMAP.md).
 
@@ -53,6 +53,18 @@ real protocol is implemented. An orange banner is shown on every page while it i
 equipment, and the field set is *illustrative* (modelled on what the vendor app exposes for treatment units),
 not a verified protocol. The choice is saved across reboots; untick the box to leave it. API: `GET/PUT /api/v1/demo`;
 `/status` and `/config` answer `503` when no device is connected and demo mode is off.
+
+## Products, Pool and Lighting (preview)
+
+The **Products** menu lists the product families of the vendor app (BPC, Pool Box, Pool Guard, AC1, IPX treatment
+devices, relays, ...). Entries marked *Preview* open a demo panel; the rest are listed but not supported yet. The
+heat pump is listed as *not supported yet* on purpose.
+
+With Demo mode on, **Pool** offers the app's filtration rule (time / thermo-adaptive / variable speed) and manual
+commands (manualOn, boost, pause, backwash, stop); **Lighting** offers on/off, the colour pulse, and the CCEI
+palette or Seamaid commands with the values the app uses. Everything is simulated; durations, limits and the
+output mapping (index 0 = pump, 1 = light) are assumptions - see [../docs/app-commands.md](../docs/app-commands.md).
+Third-party apps use the same JSON through `POST /api/v1/commands`.
 
 ## ESP32-P4 notes (Waveshare ESP32-P4-WIFI6-DEV-KIT)
 

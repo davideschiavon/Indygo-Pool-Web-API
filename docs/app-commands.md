@@ -3,6 +3,9 @@
 Source: static analysis of the vendor Android app (see [methodology](methodology.md)). Nothing here is tested on
 hardware yet. Numbers and keys are facts read from the app; the *interpretation* is marked when uncertain.
 
+> **Heat pump: set aside for now** (decision of the project owner). It is documented here for later; the
+> firmware, API and UI do not implement it.
+
 ## 1. Key finding: three different paths
 
 | Feature | Transport used by the app | Needs a vendor account? |
@@ -38,7 +41,7 @@ The BLE channel for the heat pump seems to be used only for pairing and giving i
 | App command | `action` | Extra fields |
 |-------------|---------:|--------------|
 | `stopManualCommand` | 1 | – |
-| manual on (timed) | 2 | `manualDuration` (duration), `speed` |
+| `manualOn` (timed) | 2 | `manualDuration` (duration), `speed` |
 | `boost` | 3 | `time` = `HH:MM` (from `boostDuration`/60 s), `speed` |
 | `colorChange` (pulse the light supply to step colour) | 4 | – |
 | `pause` | 5 | `manualDuration` = days (`pauseDurationInDays`) |
@@ -48,6 +51,21 @@ The BLE channel for the heat pump seems to be used only for pairing and giving i
 
 `mode` is the colour/programme number chosen in the app (spotlight type decides CCEI vs Seamaid).
 Units of `duration` are not yet confirmed.
+
+`manualOn` also accepts `forcesFiltering`: when true the app sends two actions in one request - filtration
+(output 0, `action 2`, duration + `additionalFilteringDuration`, default 600) and the output itself (`action 7`).
+
+### CCEI spotlight values (`mode` of `colorChangeCCEI`)
+
+Hot white 227, White 195, Blue 35, Lagoon 243, Cyan 115, Purple 51, Magenta 251, Pink 123, Red 59, Orange 225,
+Green 97, Favorite 33, Light 25% 241, Light 50% 113, Light 75% 49, Gradient 121, Rainbow 57, Parade 224,
+Techno 96, Horizon 32, Random 240, Magic 112, Speed 50 120, Speed 100 248, Speed 200 48, Save colour 56.
+Seamaid `mode`: 16 change colour, 48 save colour, 32 reset. (The grouping into colours/levels/programs/speeds
+is an interpretation of the app's UI code.)
+
+### Filtration rules (`PoolProgramRule`)
+
+`0` time, `1` thermo-adaptive, `2` variable-speed pump.
 
 ## 4. Manual commands over BLE (Solem modules)
 

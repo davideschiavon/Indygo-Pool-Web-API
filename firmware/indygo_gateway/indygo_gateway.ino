@@ -18,7 +18,7 @@
 #include <BLEScan.h>
 #include <BLEAdvertisedDevice.h>
 
-#define FIRMWARE_VERSION "0.3.0-m1a"
+#define FIRMWARE_VERSION "0.4.0-m1a"
 #define HOSTNAME "indygo-gateway"
 #define AP_PASSWORD "indygo-setup"  // default password of the first-connection access point
 #define STA_CONNECT_TIMEOUT_MS 15000
@@ -152,6 +152,9 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
 <div id="demo" class="hide" style="background:#b36b00;color:#fff;padding:8px 18px;font-size:14px">DEMO MODE - simulated device and invented data. Nothing is read from or sent to real equipment.</div>
 <nav><button id="t-status" class="on" onclick="tab('status')">Status</button>
 <button id="t-ble" onclick="tab('ble')">Bluetooth devices</button>
+<button id="t-products" onclick="tab('products')">Products</button>
+<button id="t-pool" onclick="tab('pool')">Pool</button>
+<button id="t-lighting" onclick="tab('lighting')">Lighting</button>
 <button id="t-settings" onclick="tab('settings')">Settings</button>
 <button id="t-wifi" onclick="tab('wifi')">Wi-Fi</button></nav>
 <main>
@@ -160,6 +163,36 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
 <label><input type="checkbox" id="demoSw" onchange="setDemo(this.checked)" style="width:auto"> Demo mode (simulated device, to preview the interface)</label>
 <h3>Live measurements</h3><table><tbody id="live"><tr><td class="muted">No device connected.</td></tr></tbody></table>
 <h3>Network</h3><div id="net">Loading...</div></section>
+
+<section id="products" class="hide"><div class="card"><h3>Products</h3>
+ <p class="muted">The product families offered by the vendor app. Entries marked <b>Preview</b> have a demo panel (turn on Demo mode on the Status page); the others are listed but not supported yet.</p>
+ <div id="cat" class="muted">Loading...</div></div></section>
+
+<section id="pool" class="hide"><div class="card"><h3>Pool filtration</h3>
+ <div id="nodemo-pool" class="muted hide">Demo mode only for now: turn it on from the Status page.</div>
+ <div id="pool-body">
+ <div id="pl-state" class="muted">Loading...</div>
+ <label>Filtration rule</label><select id="pl-rule" onchange="setRule()"><option value="0">Time</option><option value="1">Thermo-adaptive</option><option value="2">Variable speed pump</option></select>
+ <label>Duration (minutes)</label><input id="pl-min" type="number" value="60" min="1" max="1440">
+ <label>Speed (variable-speed pumps)</label><select id="pl-speed"><option>1</option><option selected>2</option><option>3</option></select>
+ <label>Pause (days)</label><input id="pl-days" type="number" value="1" min="1" max="30">
+ <p><button class="btn" onclick="poolCmd('manualOn')">Manual ON</button>
+ <button class="btn" onclick="poolCmd('boost')">Boost 24 h</button>
+ <button class="btn" onclick="poolCmd('pause')">Pause</button>
+ <button class="btn" onclick="poolCmd('backwash')">Backwash 2 min</button>
+ <button class="btn alt" onclick="poolCmd('stopManualCommand')">Stop / back to auto</button></p>
+ <p class="muted">Same commands as the vendor app: manualOn, boost, pause, backwash, stopManualCommand. Durations and limits are assumptions in this preview.</p></div></div></section>
+
+<section id="lighting" class="hide"><div class="card"><h3>Lighting</h3>
+ <div id="nodemo-lighting" class="muted hide">Demo mode only for now: turn it on from the Status page.</div>
+ <div id="light-body">
+ <div id="lt-state" class="muted">Loading...</div>
+ <p><button class="btn" onclick="lightCmd({command:'manualOn',index:1,duration:3600})">Light ON (1 h)</button>
+ <button class="btn alt" onclick="lightCmd({command:'stopManualCommand',index:1})">Light OFF</button>
+ <button class="btn" onclick="lightCmd({command:'colorChange',index:1})">Next colour (pulse)</button></p>
+ <label>Spotlight type</label><select id="lt-type" onchange="drawPalette()"><option>CCEI</option><option>Seamaid</option></select>
+ <div id="lt-pal"></div>
+ <p class="muted">CCEI values and Seamaid modes are those used by the vendor app. Grouping of the CCEI entries (colours, levels, programs, speeds) is my reading of the app and may change.</p></div></div></section>
 
 <section id="settings" class="hide"><div class="card"><h3>Settings</h3>
  <div id="cfgmsg" class="muted">No device connected. Select a device, or enable demo mode on the Status page.</div>
@@ -194,8 +227,8 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
  brings its own access point back so you can try again.</p></div>
 </section></main>
 <script>
-const $=id=>document.getElementById(id);let poll,wpoll;const T=['status','ble','settings','wifi'];
-function tab(t){for(const s of T){$(s).classList.toggle('hide',s!==t);$('t-'+s).classList.toggle('on',s===t)}if(t==='status'){loadSel();loadNet();live()}if(t==='wifi')loadNet();if(t==='settings')loadCfg()}
+const $=id=>document.getElementById(id);let poll,wpoll;const T=['status','products','pool','lighting','ble','settings','wifi'];
+function tab(t){for(const s of T){$(s).classList.toggle('hide',s!==t);$('t-'+s).classList.toggle('on',s===t)}if(t==='status'){loadSel();loadNet();live()}if(t==='wifi')loadNet();if(t==='settings')loadCfg();if(t==='products')loadCat();if(t==='pool'||t==='lighting')loadSim()}
 async function j(u,o){const r=await fetch(u,o);if(!r.ok)throw new Error(r.status);return r.status===204?null:r.json()}
 async function loadSel(){const d=await j('/api/v1/device');$('sel').textContent=d.address?((d.name||'(no name)')+' - '+d.address):'None selected yet.'}
 async function loadNet(){const w=await j('/api/v1/wifi');
@@ -223,6 +256,33 @@ async function wsave(){const s=$('ssid').value;if(!s){alert('Enter the network n
   $('wmode').textContent='Saved. The gateway is restarting - reconnect to your home Wi-Fi and open http://indygo-gateway.local'}
  catch(e){alert('Could not save (password must be empty or 8-63 characters).')}}
 async function wforget(){await j('/api/v1/wifi',{method:'DELETE'});$('wmode').textContent='Network forgotten. Restarting in access point mode...'}
+let SIM=null;const CSS={'Hot white':'#ffd9a0','White':'#ffffff','Blue':'#1f4fff','Lagoon':'#1ec3b0','Cyan':'#19d3f0','Purple':'#7a2ee0','Magenta':'#e22bd0','Pink':'#ff8fc0','Red':'#e02424','Orange':'#ff8a1f','Green':'#25b24a','Favorite':'#f2c500'};
+function fmt(s){if(!s)return'';const m=Math.floor(s/60);return m>=60?Math.floor(m/60)+' h '+(m%60)+' min':m+' min '+(s%60)+' s'}
+async function loadCat(){const d=await j('/api/v1/catalog');const box=$('cat');box.innerHTML='';
+ for(const g of['pool','relay']){const h=document.createElement('h4');h.textContent=g==='pool'?'Pool':'Relay / valve controllers';box.appendChild(h);
+  for(const p of d.products.filter(x=>x.group===g)){const r=document.createElement('div');r.style.cssText='padding:8px 0;border-bottom:1px solid #e3e9ec';
+   const b=document.createElement('b');b.textContent=p.name+' ';r.appendChild(b);
+   if(p.demoPanel){const t=document.createElement('span');t.className='tag solem_ipx';t.textContent='Preview';r.appendChild(t);
+    const bt=document.createElement('button');bt.className='btn';bt.style.marginLeft='8px';bt.textContent='Open';bt.onclick=()=>tab(p.demoPanel);r.appendChild(bt)}
+   const ds=document.createElement('div');ds.className='muted';ds.textContent=p.description;r.appendChild(ds);box.appendChild(r)}}}
+async function loadSim(){let d=null;try{d=await j('/api/v1/sim')}catch(e){}SIM=d;
+ for(const k of['pool','lighting']){$('nodemo-'+k).classList.toggle('hide',!!d);$(k+'-body').classList.toggle('hide',!d)}
+ if(!d)return;const p=d.pool,l=d.lighting;
+ $('pl-state').textContent='State: '+p.state+(p.remainingSeconds?' ('+fmt(p.remainingSeconds)+' left)':'')+' - rule: '+p.ruleName;$('pl-rule').value=p.rule;
+ $('lt-state').textContent='Light: '+(l.on?'on':'off')+' - '+l.spotlight+' - '+l.color+(l.on&&l.remainingSeconds?' ('+fmt(l.remainingSeconds)+' left)':'');
+ $('lt-type').value=l.spotlight;drawPalette()}
+async function sendCmd(o){try{await j('/api/v1/commands',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(o)})}catch(e){alert('Command rejected')}loadSim()}
+function poolCmd(c){const o={command:c,index:0};
+ if(c==='manualOn'){o.duration=parseInt($('pl-min').value)*60;o.speed=parseInt($('pl-speed').value)}
+ if(c==='pause')o.pauseDurationInDays=parseInt($('pl-days').value);
+ sendCmd(o)}
+async function setRule(){try{await j('/api/v1/pool',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({rule:parseInt($('pl-rule').value)})})}catch(e){}loadSim()}
+function lightCmd(o){sendCmd(o)}
+function drawPalette(){const box=$('lt-pal');box.innerHTML='';if(!SIM)return;
+ if($('lt-type').value==='Seamaid'){for(const [n,v] of[['Change colour',16],['Save colour',48],['Reset',32]]){const b=document.createElement('button');b.className='btn';b.style.margin='3px';b.textContent=n;b.onclick=()=>lightCmd({command:'colorChangeSeamaid',index:1,mode:v});box.appendChild(b)}return}
+ let last='';for(const c of SIM.lighting.palette){if(c.kind!==last){last=c.kind;const h=document.createElement('div');h.className='muted';h.style.marginTop='8px';h.textContent=c.kind;box.appendChild(h)}
+  const b=document.createElement('button');b.className='btn';b.style.cssText='margin:3px;'+(CSS[c.name]?'background:'+CSS[c.name]+';color:'+(['White','Hot white','Cyan','Pink','Favorite','Lagoon'].includes(c.name)?'#14232b':'#fff')+';border:1px solid #0003':'');
+  b.textContent=c.name;b.onclick=()=>lightCmd({command:'colorChangeCCEI',index:1,mode:c.value});box.appendChild(b)}}
 async function loadDemo(){const d=await j('/api/v1/demo');$('demoSw').checked=d.enabled;$('demo').classList.toggle('hide',!d.enabled)}
 async function setDemo(on){await j('/api/v1/demo',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:on})});loadDemo();loadSel();live();loadCfg()}
 const LBL=[['ph','pH',''],['orp','ORP',' mV'],['saltGramsPerLiter','Salt',' g/L'],['waterTemperatureC','Water temperature',' °C'],['productionPercent','Chlorine production',' %'],['mode','Mode',''],['boostRemainingMinutes','Boost remaining',' min'],['winterMode','Winter mode','']];
@@ -405,6 +465,186 @@ static void handleDevicePut() {
 }
 
 // ----- Wi-Fi -----
+// ---------- product catalog (families offered by the vendor app, MyIndygo build) ----------
+struct CatalogItem {
+  const char *id, *name, *group, *description, *demoPanel;  // demoPanel: "" or pool|lighting|heatpump|settings
+};
+static const CatalogItem CATALOG[] = {
+    {"lrpc", "BPC", "pool", "Connected pool controller installed in the pool's electrical box: filtration, lighting outputs, programs, manual commands.", "pool"},
+    {"lrpb", "Pool Box / Pool Box LT / Pool Box VS", "pool", "Pool electrical box with connected controller (VS = variable-speed pump).", "pool"},
+    {"lrpg", "Pool Guard", "pool", "Module for pool probes and sensors.", ""},
+    {"lrmas", "AC1", "pool", "Connected / floating analyzer (probes, batteries, wintering).", ""},
+    {"lrpr", "LR-PR", "pool", "Listed in the app; purpose not identified from its strings yet.", ""},
+    {"ipx_treatment", "IPX treatment device", "pool", "Water treatment units (PoolTech, Sterilor EVO): pH, ORP, salt, setpoints, boost, winter mode.", "settings"},
+    {"polytropic", "Polytropic heat pump", "pool", "Not supported yet (set aside for now; the app controls it through the vendor cloud).", ""},
+    {"sweeler", "Sweeler robot", "pool", "Robotic pool cleaner (IPX device).", ""},
+    {"lrniv", "Water level regulator (LR-NIV)", "pool", "Water level regulator; water consumption data.", ""},
+    {"waterlevel", "Water level sensor", "pool", "Available when the app's lrNivReno feature is on.", ""},
+    {"emec", "Emec Board", "pool", "Listed in the app.", ""},
+    {"lrcan", "Can sensor module", "pool", "Module reading can sensors (pH/ORP etc.).", ""},
+    {"poolpower", "Pool Power", "pool", "Listed in the app (power related).", ""},
+    {"distboard", "Distribution board", "pool", "Listed in the app.", ""},
+    {"poolextender", "Pool Extender", "pool", "Range extender for the pool system.", ""},
+    {"flood", "Flood sensor", "pool", "Water leak / flood sensor.", ""},
+    {"lrmb10", "LR-MB-10", "relay", "Relay / valve controller family (name from the app).", ""},
+    {"lrmb30", "LR-MB-30", "relay", "Relay / valve controller family (name from the app).", ""},
+    {"bst", "LR-BST (compact, autonomous, 4G, React)", "relay", "Relay controller family with several variants (name from the app).", ""},
+};
+
+static void handleCatalog() {
+  JsonDocument doc;
+  doc["source"] = "Families offered by the vendor app (MyIndygo build). Names/groups come from the app; descriptions are paraphrased from its strings. Only entries with a demoPanel can be previewed.";
+  JsonArray arr = doc["products"].to<JsonArray>();
+  for (const CatalogItem &c : CATALOG) {
+    JsonObject o = arr.add<JsonObject>();
+    o["id"] = c.id;
+    o["name"] = c.name;
+    o["group"] = c.group;
+    o["description"] = c.description;
+    o["demoPanel"] = c.demoPanel;
+  }
+  sendJson(200, doc);
+}
+
+// ---------- simulated pool equipment (demo mode only) ----------
+// Command names, action semantics and colour values come from the vendor app (see docs/app-commands.md).
+// The mapping index 0 = filtration pump, index 1 = lighting, durations in seconds, and the limits below are
+// ASSUMPTIONS for the demo, not verified.
+struct CceiColor { const char *name; int value; const char *kind; };
+static const CceiColor CCEI_COLORS[] = {
+    {"Hot white", 227, "white"}, {"White", 195, "white"},
+    {"Blue", 35, "color"}, {"Lagoon", 243, "color"}, {"Cyan", 115, "color"}, {"Purple", 51, "color"},
+    {"Magenta", 251, "color"}, {"Pink", 123, "color"}, {"Red", 59, "color"}, {"Orange", 225, "color"},
+    {"Green", 97, "color"}, {"Favorite", 33, "color"},
+    {"Light 25%", 241, "level"}, {"Light 50%", 113, "level"}, {"Light 75%", 49, "level"},
+    {"Gradient", 121, "program"}, {"Rainbow", 57, "program"}, {"Parade", 224, "program"}, {"Techno", 96, "program"},
+    {"Horizon", 32, "program"}, {"Random", 240, "program"}, {"Magic", 112, "program"},
+    {"Speed 50", 120, "speed"}, {"Speed 100", 248, "speed"}, {"Speed 200", 48, "speed"},
+    {"Save color", 56, "save"},
+};
+static const int CCEI_COUNT = sizeof(CCEI_COLORS) / sizeof(CCEI_COLORS[0]);
+
+static struct {
+  int rule = 0;  // 0 time, 1 thermo-adaptive, 2 variable-speed pump
+  String pump = "auto";  // auto | manualOn | boost | paused | backwash
+  uint32_t pumpEnd = 0;
+  int pumpSpeed = 2;
+  bool lightOn = false;
+  uint32_t lightEnd = 0;
+  String spotlight = "CCEI";  // CCEI | Seamaid
+  String lightName = "Blue";
+  int lightValue = 35;
+  int cycle = 2;
+} sim;
+
+static const char *RULE_NAMES[] = {"time", "thermo-adaptive", "variable speed pump"};
+
+static int remainingS(uint32_t endMs) {
+  int32_t d = (int32_t)(endMs - millis());
+  return d > 0 ? d / 1000 : 0;
+}
+
+static void simTick() {
+  if (sim.pump != "auto" && (int32_t)(millis() - sim.pumpEnd) >= 0) sim.pump = "auto";
+  if (sim.lightOn && sim.lightEnd && (int32_t)(millis() - sim.lightEnd) >= 0) sim.lightOn = false;
+}
+
+static void handleSim() {
+  if (!demoMode) return noDevice();
+  simTick();
+  JsonDocument doc;
+  doc["demo"] = true;
+  JsonObject pool = doc["pool"].to<JsonObject>();
+  pool["rule"] = sim.rule;
+  pool["ruleName"] = RULE_NAMES[sim.rule];
+  pool["state"] = sim.pump;
+  pool["remainingSeconds"] = sim.pump == "auto" ? 0 : remainingS(sim.pumpEnd);
+  pool["speed"] = sim.pumpSpeed;
+  JsonObject l = doc["lighting"].to<JsonObject>();
+  l["on"] = sim.lightOn;
+  l["spotlight"] = sim.spotlight;
+  l["color"] = sim.lightName;
+  l["colorValue"] = sim.lightValue;
+  l["remainingSeconds"] = sim.lightOn ? remainingS(sim.lightEnd) : 0;
+  JsonArray pal = l["palette"].to<JsonArray>();
+  for (int i = 0; i < CCEI_COUNT; i++) {
+    JsonObject p = pal.add<JsonObject>();
+    p["name"] = CCEI_COLORS[i].name;
+    p["value"] = CCEI_COLORS[i].value;
+    p["kind"] = CCEI_COLORS[i].kind;
+  }
+  sendJson(200, doc);
+}
+
+// POST /api/v1/commands: same JSON shape the vendor app passes to its sendManualCommand().
+static void handleCommand() {
+  if (!demoMode) return noDevice();
+  JsonDocument in;
+  if (deserializeJson(in, server.arg("plain")) || !in["command"].is<const char *>()) {
+    server.send(400, "application/json", "{\"error\":\"body must contain a \\\"command\\\"\"}");
+    return;
+  }
+  simTick();
+  String cmd = in["command"].as<String>();
+  int index = in["index"] | 0;
+  bool isPump = (index == 0);
+  uint32_t now = millis();
+  auto reject = []() { server.send(422, "application/json", "{\"error\":\"unknown command or value out of range\"}"); };
+
+  if (cmd == "manualOn") {
+    int dur = in["duration"] | 3600;
+    int speed = in["speed"] | 2;
+    if (dur < 1 || dur > 86400 || speed < 1 || speed > 3) return reject();
+    if (isPump) { sim.pump = "manualOn"; sim.pumpEnd = now + dur * 1000UL; sim.pumpSpeed = speed; }
+    else { sim.lightOn = true; sim.lightEnd = now + dur * 1000UL; }
+  } else if (cmd == "stopManualCommand") {
+    if (isPump) sim.pump = "auto"; else sim.lightOn = false;
+  } else if (cmd == "boost") {
+    int dur = in["boostDuration"] | 86400;
+    if (dur < 60 || dur > 604800) return reject();
+    sim.pump = "boost"; sim.pumpEnd = now + dur * 1000UL;
+  } else if (cmd == "pause") {
+    int days = in["pauseDurationInDays"] | 1;
+    if (days < 1 || days > 30) return reject();
+    sim.pump = "paused"; sim.pumpEnd = now + days * 86400000UL;
+  } else if (cmd == "backwash") {
+    int dur = in["duration"] | 120;
+    if (dur < 10 || dur > 1800) return reject();
+    sim.pump = "backwash"; sim.pumpEnd = now + dur * 1000UL;
+  } else if (cmd == "colorChange") {  // pulse the light supply: the lamp steps to its next colour
+    do { sim.cycle = (sim.cycle + 1) % CCEI_COUNT; } while (String(CCEI_COLORS[sim.cycle].kind) != "color");
+    sim.lightOn = true; sim.lightEnd = 0; sim.lightName = CCEI_COLORS[sim.cycle].name; sim.lightValue = CCEI_COLORS[sim.cycle].value;
+  } else if (cmd == "colorChangeCCEI") {
+    int mode = in["mode"] | -1;
+    int found = -1;
+    for (int i = 0; i < CCEI_COUNT; i++) if (CCEI_COLORS[i].value == mode) found = i;
+    if (found < 0) return reject();
+    sim.spotlight = "CCEI"; sim.lightOn = true; sim.lightEnd = 0;
+    sim.lightName = CCEI_COLORS[found].name; sim.lightValue = mode;
+  } else if (cmd == "colorChangeSeamaid") {
+    int mode = in["mode"] | -1;  // 16 change colour, 48 save colour, 32 reset
+    if (mode != 16 && mode != 48 && mode != 32) return reject();
+    sim.spotlight = "Seamaid"; sim.lightOn = true; sim.lightEnd = 0; sim.lightValue = mode;
+    sim.lightName = mode == 16 ? "Change colour" : (mode == 48 ? "Save colour" : "Reset");
+  } else {
+    return reject();
+  }
+  server.send(204);
+}
+
+static void handlePoolPut() {
+  if (!demoMode) return noDevice();
+  JsonDocument in;
+  int rule = -1;
+  if (!deserializeJson(in, server.arg("plain"))) rule = in["rule"] | -1;
+  if (rule < 0 || rule > 2) {
+    server.send(422, "application/json", "{\"error\":\"rule must be 0 (time), 1 (thermo-adaptive) or 2 (variable speed pump)\"}");
+    return;
+  }
+  sim.rule = rule;
+  server.send(204);
+}
+
 static void handleWifiGet() {
   JsonDocument doc;
   doc["mode"] = apMode ? "ap" : "sta";
@@ -536,6 +776,10 @@ void setup() {
   server.on("/api/v1/status", HTTP_GET, handleStatus);
   server.on("/api/v1/config", HTTP_GET, handleConfigGet);
   server.on("/api/v1/config", HTTP_PUT, handleConfigPut);
+  server.on("/api/v1/catalog", HTTP_GET, handleCatalog);
+  server.on("/api/v1/sim", HTTP_GET, handleSim);
+  server.on("/api/v1/commands", HTTP_POST, handleCommand);
+  server.on("/api/v1/pool", HTTP_PUT, handlePoolPut);
   server.on("/api/v1/wifi", HTTP_GET, handleWifiGet);
   server.on("/api/v1/wifi", HTTP_PUT, handleWifiPut);
   server.on("/api/v1/wifi", HTTP_DELETE, handleWifiDelete);

@@ -114,6 +114,78 @@ paths:
                 enabled: { type: boolean }
       responses:
         '204': { description: Applied }
+  /catalog:
+    get:
+      summary: Product families offered by the vendor app (MyIndygo build)
+      description: Names and groups come from the app; descriptions are paraphrased. `demoPanel` tells which preview panel exists ("" = listed but not supported yet).
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  source: { type: string }
+                  products:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string }
+                        name: { type: string }
+                        group: { type: string, enum: [pool, relay] }
+                        description: { type: string }
+                        demoPanel: { type: string, enum: ['', pool, lighting, settings] }
+  /sim:
+    get:
+      summary: State of the simulated pool equipment (demo mode only, 503 otherwise)
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Sim' }
+        '503': { description: Demo mode off and no device connected }
+  /commands:
+    post:
+      summary: Send a manual command (demo mode only for now)
+      description: |
+        Same JSON shape the vendor app passes to its `sendManualCommand`. Output `index` 0 = filtration pump,
+        1 = lighting (ASSUMPTION for the demo). Durations in seconds (assumed). See docs/app-commands.md.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [command]
+              properties:
+                command:
+                  type: string
+                  enum: [manualOn, stopManualCommand, boost, pause, backwash, colorChange, colorChangeCCEI, colorChangeSeamaid]
+                index: { type: integer, default: 0 }
+                duration: { type: integer, description: 'manualOn 1-86400 s (default 3600); backwash 10-1800 s (default 120)' }
+                boostDuration: { type: integer, description: 'boost 60-604800 s (default 86400)' }
+                pauseDurationInDays: { type: integer, description: 'pause 1-30' }
+                speed: { type: integer, description: 'variable-speed pumps, 1-3 (default 2)' }
+                mode: { type: integer, description: 'colorChangeCCEI: a CCEI value from the /sim palette; colorChangeSeamaid: 16, 32 or 48' }
+      responses:
+        '204': { description: Accepted }
+        '422': { description: Unknown command or value out of range }
+        '503': { description: Demo mode off and no device connected }
+  /pool:
+    put:
+      summary: Set the filtration rule (demo mode only)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                rule: { type: integer, enum: [0, 1, 2], description: '0 time, 1 thermo-adaptive, 2 variable speed pump' }
+      responses:
+        '204': { description: Applied }
+        '422': { description: Invalid rule }
   /device:
     get:
       summary: Selected pool device (connection state, model, firmware)
@@ -183,6 +255,35 @@ components:
         wifiRssi: { type: integer }
         bleConnected: { type: boolean }
         scanning: { type: boolean }
+    Sim:
+      type: object
+      description: ILLUSTRATIVE simulated state (demo mode).
+      properties:
+        demo: { type: boolean }
+        pool:
+          type: object
+          properties:
+            rule: { type: integer }
+            ruleName: { type: string }
+            state: { type: string, enum: [auto, manualOn, boost, paused, backwash] }
+            remainingSeconds: { type: integer }
+            speed: { type: integer }
+        lighting:
+          type: object
+          properties:
+            on: { type: boolean }
+            spotlight: { type: string, enum: [CCEI, Seamaid] }
+            color: { type: string }
+            colorValue: { type: integer }
+            remainingSeconds: { type: integer }
+            palette:
+              type: array
+              items:
+                type: object
+                properties:
+                  name: { type: string }
+                  value: { type: integer }
+                  kind: { type: string, enum: [white, color, level, program, speed, save] }
     Wifi:
       type: object
       properties:

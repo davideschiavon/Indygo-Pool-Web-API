@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 ### Added
+- Firmware 0.4.0-m1a: Products menu (catalog of the app's product families), Pool and Lighting preview panels with
+  the app's manual commands, CCEI/Seamaid colour values and filtration rules (demo mode). API: `/catalog`, `/sim`,
+  `/commands`, `/pool`. The heat pump is deliberately left out for now.
 - docs/app-commands.md: heat pump, light/colour and pool manual commands as found in the vendor app,
   with the transport each one uses (cloud vs local HTTP vs BLE).
 - Demo mode (firmware 0.3.0-m1a): simulated pool controller with invented data to preview the full UI
