@@ -18,7 +18,7 @@
 #include <BLEScan.h>
 #include <BLEAdvertisedDevice.h>
 
-#define FIRMWARE_VERSION "0.2.0-m1a"
+#define FIRMWARE_VERSION "0.3.0-m1a"
 #define HOSTNAME "indygo-gateway"
 #define AP_PASSWORD "indygo-setup"  // default password of the first-connection access point
 #define STA_CONNECT_TIMEOUT_MS 15000
@@ -50,6 +50,22 @@ static String apSsid;
 static String savedSsid;           // home network stored in flash ("" = none)
 static uint32_t restartAtMs = 0;   // non-zero: restart when millis() reaches it
 static uint32_t lastStaRetryMs = 0;
+
+// ---------- demo mode ----------
+// Simulated pool device so the full interface can be explored without real equipment. ALL values are
+// invented; the field set is illustrative (modelled on what the vendor app exposes for treatment units),
+// NOT a verified protocol. Nothing is read from or sent to real equipment while it is on.
+static bool demoMode = false;
+static struct {
+  float phSetpoint = 7.2f;
+  int orpSetpoint = 670;
+  int productionPercent = 50;
+  String mode = "auto";  // off | auto | on
+  bool boost = false;
+  uint32_t boostEndMs = 0;
+  bool winter = false;
+} demo;
+#define DEMO_BOOST_MINUTES 120
 
 // ---------- classification (patterns from docs/protocol-ble.md) ----------
 static String classify(const String &name, const String &services) {
@@ -129,17 +145,32 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
  .pool{background:#e4f6ec}.btn{background:#0b5d7a;color:#fff;border:0;border-radius:6px;padding:8px 14px;cursor:pointer}
  .btn.alt{background:#8a3b3b}.btn[disabled]{opacity:.5}.tag{font-size:12px;padding:2px 7px;border-radius:10px;background:#dfe7ea}
  .tag.pooltech,.tag.sterilor_evo,.tag.solem_ipx{background:#2e9e5b;color:#fff}.muted{color:#5a6c75;font-size:13px}
- input{padding:8px;border:1px solid #b9c7cd;border-radius:6px;width:100%;box-sizing:border-box;margin:4px 0 10px}
+ input,select{padding:8px;border:1px solid #b9c7cd;border-radius:6px;width:100%;box-sizing:border-box;margin:4px 0 10px}
  .hide{display:none}
 </style></head><body>
 <header>Indygo Pool Gateway <span class="muted" id="ver" style="color:#cfe8f1"></span></header>
+<div id="demo" class="hide" style="background:#b36b00;color:#fff;padding:8px 18px;font-size:14px">DEMO MODE - simulated device and invented data. Nothing is read from or sent to real equipment.</div>
 <nav><button id="t-status" class="on" onclick="tab('status')">Status</button>
 <button id="t-ble" onclick="tab('ble')">Bluetooth devices</button>
+<button id="t-settings" onclick="tab('settings')">Settings</button>
 <button id="t-wifi" onclick="tab('wifi')">Wi-Fi</button></nav>
 <main>
 <section id="status" class="card"><h3>Selected pool device</h3><div id="sel">Loading...</div>
 <p class="muted">Open the <b>Bluetooth devices</b> menu to find and select your device.</p>
+<label><input type="checkbox" id="demoSw" onchange="setDemo(this.checked)" style="width:auto"> Demo mode (simulated device, to preview the interface)</label>
+<h3>Live measurements</h3><table><tbody id="live"><tr><td class="muted">No device connected.</td></tr></tbody></table>
 <h3>Network</h3><div id="net">Loading...</div></section>
+
+<section id="settings" class="hide"><div class="card"><h3>Settings</h3>
+ <div id="cfgmsg" class="muted">No device connected. Select a device, or enable demo mode on the Status page.</div>
+ <div id="cfgform" class="hide">
+ <label>pH setpoint (6.8 - 7.8)</label><input id="c-ph" type="number" step="0.1" min="6.8" max="7.8">
+ <label>ORP setpoint, mV (400 - 900)</label><input id="c-orp" type="number" step="10" min="400" max="900">
+ <label>Chlorine production, % (0 - 100)</label><input id="c-pct" type="number" min="0" max="100">
+ <label>Mode</label><select id="c-mode"><option>off</option><option>auto</option><option>on</option></select>
+ <label><input type="checkbox" id="c-boost" style="width:auto"> Boost</label>
+ <label><input type="checkbox" id="c-winter" style="width:auto"> Winter mode</label>
+ <button class="btn" onclick="saveCfg()">Apply</button> <span class="muted" id="cfgstate"></span></div></div></section>
 
 <section id="ble" class="hide">
  <div class="card"><button class="btn" id="scan" onclick="scan()">Scan nearby Bluetooth devices</button>
@@ -163,8 +194,8 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
  brings its own access point back so you can try again.</p></div>
 </section></main>
 <script>
-const $=id=>document.getElementById(id);let poll,wpoll;const T=['status','ble','wifi'];
-function tab(t){for(const s of T){$(s).classList.toggle('hide',s!==t);$('t-'+s).classList.toggle('on',s===t)}if(t==='status'){loadSel();loadNet()}if(t==='wifi')loadNet()}
+const $=id=>document.getElementById(id);let poll,wpoll;const T=['status','ble','settings','wifi'];
+function tab(t){for(const s of T){$(s).classList.toggle('hide',s!==t);$('t-'+s).classList.toggle('on',s===t)}if(t==='status'){loadSel();loadNet();live()}if(t==='wifi')loadNet();if(t==='settings')loadCfg()}
 async function j(u,o){const r=await fetch(u,o);if(!r.ok)throw new Error(r.status);return r.status===204?null:r.json()}
 async function loadSel(){const d=await j('/api/v1/device');$('sel').textContent=d.address?((d.name||'(no name)')+' - '+d.address):'None selected yet.'}
 async function loadNet(){const w=await j('/api/v1/wifi');
@@ -192,7 +223,20 @@ async function wsave(){const s=$('ssid').value;if(!s){alert('Enter the network n
   $('wmode').textContent='Saved. The gateway is restarting - reconnect to your home Wi-Fi and open http://indygo-gateway.local'}
  catch(e){alert('Could not save (password must be empty or 8-63 characters).')}}
 async function wforget(){await j('/api/v1/wifi',{method:'DELETE'});$('wmode').textContent='Network forgotten. Restarting in access point mode...'}
-j('/api/v1/gateway').then(g=>$('ver').textContent='v'+g.firmware);loadSel();loadNet();
+async function loadDemo(){const d=await j('/api/v1/demo');$('demoSw').checked=d.enabled;$('demo').classList.toggle('hide',!d.enabled)}
+async function setDemo(on){await j('/api/v1/demo',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:on})});loadDemo();loadSel();live();loadCfg()}
+const LBL=[['ph','pH',''],['orp','ORP',' mV'],['saltGramsPerLiter','Salt',' g/L'],['waterTemperatureC','Water temperature',' °C'],['productionPercent','Chlorine production',' %'],['mode','Mode',''],['boostRemainingMinutes','Boost remaining',' min'],['winterMode','Winter mode','']];
+async function live(){let d=null;try{d=await j('/api/v1/status')}catch(e){}
+ $('live').innerHTML='';if(!d){$('live').innerHTML='<tr><td class="muted">No device connected.</td></tr>';return}
+ for(const [k,n,u] of LBL){if(d[k]===undefined)continue;const tr=document.createElement('tr');tr.innerHTML='<td></td><td></td>';
+  tr.children[0].textContent=n;let v=d[k];if(typeof v==='boolean')v=v?'on':'off';else if(typeof v==='number')v=(Number.isInteger(v)?v:v.toFixed(2));tr.children[1].textContent=v+u;$('live').appendChild(tr)}
+ const a=document.createElement('tr');a.innerHTML='<td></td><td></td>';a.children[0].textContent='Alarms';a.children[1].textContent=d.alarms&&d.alarms.length?d.alarms.join(', '):'none';$('live').appendChild(a)}
+async function loadCfg(){let c=null;try{c=await j('/api/v1/config')}catch(e){}
+ $('cfgform').classList.toggle('hide',!c);$('cfgmsg').classList.toggle('hide',!!c);if(!c)return;
+ $('c-ph').value=c.phSetpoint;$('c-orp').value=c.orpSetpoint;$('c-pct').value=c.productionPercent;$('c-mode').value=c.mode;$('c-boost').checked=c.boost;$('c-winter').checked=c.winterMode}
+async function saveCfg(){try{await j('/api/v1/config',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({phSetpoint:parseFloat($('c-ph').value),orpSetpoint:parseInt($('c-orp').value),productionPercent:parseInt($('c-pct').value),mode:$('c-mode').value,boost:$('c-boost').checked,winterMode:$('c-winter').checked})});$('cfgstate').textContent='Applied.'}
+ catch(e){$('cfgstate').textContent='Rejected: value outside the allowed range.'}setTimeout(()=>$('cfgstate').textContent='',3000);live()}
+j('/api/v1/gateway').then(g=>$('ver').textContent='v'+g.firmware);loadSel();loadNet();loadDemo();live();setInterval(()=>{if(!$('status').classList.contains('hide'))live()},3000);
 </script></body></html>)HTML";
 
 static void sendJson(int code, JsonDocument &doc) {
@@ -207,6 +251,7 @@ static void handleGateway() {
   doc["uptimeSeconds"] = (uint32_t)(millis() / 1000);
   doc["wifiRssi"] = apMode ? 0 : WiFi.RSSI();
   doc["bleConnected"] = false;  // connection to the pool device is not implemented yet
+  doc["demo"] = demoMode;
   doc["scanning"] = (bool)scanning;
   sendJson(200, doc);
 }
@@ -242,10 +287,108 @@ static void handleScanResults() {
 
 static void handleDeviceGet() {
   JsonDocument doc;
-  doc["address"] = selAddress;
-  doc["name"] = selName;
-  doc["connected"] = false;
+  if (demoMode) {
+    doc["address"] = "DE:MO:00:00:00:01";  // invented
+    doc["name"] = "DEMO Pool Controller (simulated)";
+    doc["family"] = "demo";
+    doc["connected"] = true;
+    doc["demo"] = true;
+  } else {
+    doc["address"] = selAddress;
+    doc["name"] = selName;
+    doc["connected"] = false;  // connection to the pool device is not implemented yet
+    doc["demo"] = false;
+  }
   sendJson(200, doc);
+}
+
+// ----- demo mode (simulated device) -----
+static void demoTick() {  // expire the simulated boost
+  if (demo.boost && (int32_t)(millis() - demo.boostEndMs) >= 0) demo.boost = false;
+}
+
+static void handleDemoGet() {
+  JsonDocument doc;
+  doc["enabled"] = demoMode;
+  sendJson(200, doc);
+}
+
+static void handleDemoPut() {
+  JsonDocument in;
+  if (deserializeJson(in, server.arg("plain")) || !in["enabled"].is<bool>()) {
+    server.send(400, "application/json", "{\"error\":\"body must be {\\\"enabled\\\":true|false}\"}");
+    return;
+  }
+  demoMode = in["enabled"].as<bool>();
+  prefs.putBool("demo", demoMode);
+  server.send(204);
+}
+
+static void noDevice() {
+  server.send(503, "application/json", "{\"error\":\"no device connected (enable demo mode to preview)\"}");
+}
+
+static void handleStatus() {
+  if (!demoMode) return noDevice();
+  demoTick();
+  float t = millis() / 1000.0f;
+  JsonDocument doc;
+  doc["demo"] = true;
+  doc["uptimeSeconds"] = (uint32_t)t;
+  doc["ph"] = serialized(String(demo.phSetpoint + 0.06f * sinf(t / 37.0f), 2));
+  doc["orp"] = (int)(demo.orpSetpoint + 18.0f * sinf(t / 53.0f));
+  doc["saltGramsPerLiter"] = serialized(String(4.7f + 0.04f * sinf(t / 211.0f), 2));
+  doc["waterTemperatureC"] = serialized(String(27.0f + 0.5f * sinf(t / 389.0f), 1));
+  doc["mode"] = demo.mode;
+  doc["productionPercent"] = demo.mode == "off" ? 0 : (demo.mode == "on" || demo.boost ? 100 : demo.productionPercent);
+  doc["boostRemainingMinutes"] = demo.boost ? (int)((demo.boostEndMs - millis()) / 60000UL) + 1 : 0;
+  doc["winterMode"] = demo.winter;
+  doc["alarms"].to<JsonArray>();  // none in the demo
+  sendJson(200, doc);
+}
+
+static void handleConfigGet() {
+  if (!demoMode) return noDevice();
+  demoTick();
+  JsonDocument doc;
+  doc["demo"] = true;
+  doc["phSetpoint"] = serialized(String(demo.phSetpoint, 1));
+  doc["orpSetpoint"] = demo.orpSetpoint;
+  doc["productionPercent"] = demo.productionPercent;
+  doc["mode"] = demo.mode;
+  doc["boost"] = demo.boost;
+  doc["winterMode"] = demo.winter;
+  sendJson(200, doc);
+}
+
+static void handleConfigPut() {
+  if (!demoMode) return noDevice();
+  JsonDocument in;
+  if (deserializeJson(in, server.arg("plain"))) {
+    server.send(400, "application/json", "{\"error\":\"invalid JSON\"}");
+    return;
+  }
+  // Validate everything first, apply only if all fields are inside the allowed ranges.
+  float ph = in["phSetpoint"] | demo.phSetpoint;
+  int orp = in["orpSetpoint"] | demo.orpSetpoint;
+  int pct = in["productionPercent"] | demo.productionPercent;
+  String mode = in["mode"] | demo.mode.c_str();
+  if (ph < 6.8f || ph > 7.8f || orp < 400 || orp > 900 || pct < 0 || pct > 100 ||
+      !(mode == "off" || mode == "auto" || mode == "on")) {
+    server.send(422, "application/json", "{\"error\":\"value outside allowed range\"}");
+    return;
+  }
+  demo.phSetpoint = ph;
+  demo.orpSetpoint = orp;
+  demo.productionPercent = pct;
+  demo.mode = mode;
+  if (in["winterMode"].is<bool>()) demo.winter = in["winterMode"].as<bool>();
+  if (in["boost"].is<bool>()) {
+    bool b = in["boost"].as<bool>();
+    if (b && !demo.boost) demo.boostEndMs = millis() + DEMO_BOOST_MINUTES * 60000UL;
+    demo.boost = b;
+  }
+  server.send(204);
 }
 
 static void handleDevicePut() {
@@ -371,6 +514,7 @@ void setup() {
   prefs.begin("indygo", false);
   selAddress = prefs.getString("addr", "");
   selName = prefs.getString("name", "");
+  demoMode = prefs.getBool("demo", false);
 
   BLEDevice::init("indygo-gateway");
   bleScan = BLEDevice::getScan();
@@ -387,6 +531,11 @@ void setup() {
   server.on("/api/v1/ble/scan", HTTP_GET, handleScanResults);
   server.on("/api/v1/device", HTTP_GET, handleDeviceGet);
   server.on("/api/v1/device", HTTP_PUT, handleDevicePut);
+  server.on("/api/v1/demo", HTTP_GET, handleDemoGet);
+  server.on("/api/v1/demo", HTTP_PUT, handleDemoPut);
+  server.on("/api/v1/status", HTTP_GET, handleStatus);
+  server.on("/api/v1/config", HTTP_GET, handleConfigGet);
+  server.on("/api/v1/config", HTTP_PUT, handleConfigPut);
   server.on("/api/v1/wifi", HTTP_GET, handleWifiGet);
   server.on("/api/v1/wifi", HTTP_PUT, handleWifiPut);
   server.on("/api/v1/wifi", HTTP_DELETE, handleWifiDelete);

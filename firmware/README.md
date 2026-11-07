@@ -1,12 +1,14 @@
 # Firmware
 
-ESP32 firmware: BLE discovery + web UI + REST API. Current version: **0.2.0-m1a**
+ESP32 firmware: BLE discovery + web UI + REST API. Current version: **0.3.0-m1a**
 (`indygo_gateway/indygo_gateway.ino`). It finds and remembers your device but does **not** talk to it
 yet — that needs the protocol work in [../docs/ROADMAP.md](../docs/ROADMAP.md).
 
-> Status: compiles for the classic ESP32 and for the Waveshare ESP32-P4-WIFI6-DEV-KIT. On the P4 board the
-> access point was **confirmed visible** from a PC (WPA2, channel 1) after flashing; the web UI and BLE scan
-> have not been tested end to end yet — please report what you see.
+> Status: compiles for the classic ESP32 and for the Waveshare ESP32-P4-WIFI6-DEV-KIT. Verified on the P4 board:
+> access point visible (WPA2, channel 1), the saved home network is rejoined after a reboot/reflash, the
+> hostname `indygo-gateway.local` resolves from a Windows PC, and the REST API (gateway, demo, status, config
+> with range checks) behaves as documented. BLE scan results and the real device connection are still
+> to be confirmed — please report what you see.
 
 ## Build and flash
 
@@ -40,6 +42,17 @@ Open **Bluetooth devices → Scan**. Devices that look like Indygo/Solem pool eq
 (`pooltech`, `sterilor_evo`, `solem_ipx`), with their advertised name, services and manufacturer data.
 Select yours; the choice is saved. **Please share what your device shows** (without serial/MAC) in an issue —
 it is the fastest way to finish the protocol notes.
+
+## Demo mode
+
+On the **Status** page tick *Demo mode*. The gateway then behaves as if a pool controller were connected, so you
+can explore every menu (live measurements, Settings with ranges and boost/winter/mode, Bluetooth, Wi-Fi) before the
+real protocol is implemented. An orange banner is shown on every page while it is on.
+
+**Everything in demo mode is simulated.** The values are invented, nothing is read from or sent to real
+equipment, and the field set is *illustrative* (modelled on what the vendor app exposes for treatment units),
+not a verified protocol. The choice is saved across reboots; untick the box to leave it. API: `GET/PUT /api/v1/demo`;
+`/status` and `/config` answer `503` when no device is connected and demo mode is off.
 
 ## ESP32-P4 notes (Waveshare ESP32-P4-WIFI6-DEV-KIT)
 

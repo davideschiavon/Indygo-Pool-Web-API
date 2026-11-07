@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 ### Added
+- Demo mode (firmware 0.3.0-m1a): simulated pool controller with invented data to preview the full UI
+  (Status with live measurements, Settings, banner). API: `/demo`, `/status`, `/config` (the last two only
+  answer in demo mode until the real protocol is implemented; `503` otherwise).
 - Firmware builds for the Waveshare ESP32-P4-WIFI6-DEV-KIT (`esp32p4`, `ChipVariant=postv3`); the access point
   was confirmed visible from a PC. A harmless C6 firmware-version warning appears in the boot log
   (see firmware/README.md).

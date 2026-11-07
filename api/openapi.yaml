@@ -90,6 +90,30 @@ paths:
                         ssid: { type: string }
                         rssi: { type: integer }
                         secure: { type: boolean }
+  /demo:
+    get:
+      summary: Demo mode state (simulated device with invented data)
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  enabled: { type: boolean }
+    put:
+      summary: Enable or disable demo mode (persisted)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enabled]
+              properties:
+                enabled: { type: boolean }
+      responses:
+        '204': { description: Applied }
   /device:
     get:
       summary: Selected pool device (connection state, model, firmware)
@@ -112,8 +136,9 @@ paths:
         '204': { description: Selected }
   /status:
     get:
-      summary: Latest measurements and operating state
+      summary: Latest measurements and operating state (demo mode only for now)
       responses:
+        '503': { description: No device connected }
         '200':
           description: OK
           content:
@@ -121,8 +146,9 @@ paths:
               schema: { $ref: '#/components/schemas/Status' }
   /config:
     get:
-      summary: Current device configuration
+      summary: Current device configuration (demo mode only for now)
       responses:
+        '503': { description: No device connected }
         '200':
           description: OK
           content:
@@ -136,8 +162,8 @@ paths:
             schema: { $ref: '#/components/schemas/Config' }
       responses:
         '204': { description: Applied }
-        '403': { description: Write support disabled }
-        '422': { description: Value outside safety limits }
+        '422': { description: Value outside the allowed range, nothing applied }
+        '503': { description: No device connected }
   /events:
     get:
       summary: Server-Sent Events stream of status changes
@@ -184,18 +210,31 @@ components:
         connected: { type: boolean, description: Always false until the BLE connection is implemented }
     Status:
       type: object
-      description: Fields depend on the device model; absent when not supported.
+      description: |
+        ILLUSTRATIVE field set. Today it is only served in demo mode with INVENTED values; the real
+        fields will be defined once the BLE protocol is decoded and may differ.
       properties:
-        timestamp: { type: string, format: date-time }
+        demo: { type: boolean }
+        uptimeSeconds: { type: integer }
         ph: { type: number }
-        orp: { type: number, description: mV }
+        orp: { type: integer, description: mV }
         saltGramsPerLiter: { type: number }
         waterTemperatureC: { type: number }
-        mode: { type: string }
+        mode: { type: string, enum: [off, auto, 'on'] }
+        productionPercent: { type: integer, minimum: 0, maximum: 100 }
+        boostRemainingMinutes: { type: integer }
+        winterMode: { type: boolean }
         alarms:
           type: array
           items: { type: string }
     Config:
       type: object
-      description: Model-dependent setpoints and modes (TBD from protocol work).
-      additionalProperties: true
+      description: |
+        ILLUSTRATIVE (demo mode only). Ranges are enforced; an out-of-range field rejects the whole request.
+      properties:
+        phSetpoint: { type: number, minimum: 6.8, maximum: 7.8 }
+        orpSetpoint: { type: integer, minimum: 400, maximum: 900 }
+        productionPercent: { type: integer, minimum: 0, maximum: 100 }
+        mode: { type: string, enum: [off, auto, 'on'] }
+        boost: { type: boolean }
+        winterMode: { type: boolean }
