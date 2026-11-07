@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 ### Added
+- Firmware 0.7.1-m1a: `POST /api/v1/dev/ble/crypto` (AES-128-CTR encrypt/decrypt using the session nonce) to
+  prepare/read encrypted BLE command frames. Used it to confirm, against a real POOL COMMAND VS2, that a read
+  status command and a harmless write command (stopManualCommand) both round-trip correctly end to end -
+  see docs/ble-auth.md for the exact bytes and the acknowledgement convention (response cmd = request cmd + 1).
 - Firmware 0.7.0-m1a: BLE session authentication handshake (`POST /api/v1/dev/ble/auth`, AES-128-ECB nonce
   response) for Solem/Indygo devices that require it. The AES key is supplied locally via a git-ignored
   `ble_secrets.h` (see `ble_secrets.h.example`) and is never published or echoed by any endpoint. See

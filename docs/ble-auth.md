@@ -50,23 +50,27 @@ the CTR convention from a real captured frame.
 
 If `ble_secrets.h` is absent or empty, the endpoint returns a clear error instead of silently failing.
 
-## Tested against a real device (2026-11-07)
+## Tested against a real device (2026-11-07) — confirmed working end to end
 
-Against an actual POOL COMMAND VS² (LRPC-VS2):
+Against an actual POOL COMMAND VS² (LRPC-VS2), using `POST /api/v1/dev/ble/crypto` (`encrypt-ctr`/`decrypt-ctr`,
+AES-128-CTR-NoPadding, fresh counter = the session nonce for each message, matching the app's per-call Cipher
+usage) together with the existing read/write/auth endpoints:
 
-- **Confirmed**: the characteristic layout above (service `91D50001-...`, auth characteristic `91D50005-...`,
-  write/notify characteristics `91D50002-...`/`91D50003-...`), reading a fresh 16-byte nonce, encrypting it
-  AES-128-ECB-NoPadding and writing the 16-byte result back — all complete without an ATT error and without
-  the device dropping the link (confirmed the link stayed up for 5+ seconds afterward and kept answering other
-  reads).
-- **Not yet confirmed**: whether the key/response was actually *accepted* as valid by the device. On a clean
-  disconnect + reconnect, the auth characteristic always returned a fresh nonce rather than the `AUTHENTICATED`
-  marker, and subscribing to the notify characteristic produced no traffic in a 20 s window post-handshake.
-  The marker-reuse behaviour in the app may depend on OS-level BLE bonding (pairing), which this gateway does
-  not perform yet — so its absence here is not proof the key is wrong, just not a positive confirmation either.
-- **Next checks**: (a) perform an actual BLE bond/pair from the gateway and repeat the reconnect test; (b)
-  implement the AES-CTR payload decryption (step 5) and see if a read on the data characteristic yields
-  plausible values (e.g. a temperature in a sane range) instead of noise.
+1. Performed the handshake (`/dev/ble/auth`): read a 16-byte nonce, sent back its AES-128-ECB encryption.
+2. Encrypted the 2-byte "read pool status" command (`0xC7 0x00`, from `FrameManager.readPoolStatus()`), wrote
+   it to the command characteristic (`91D50002-...`), and received a notification on `91D50003-...`.
+   **Decrypted it to `C8 0C 01 0C 0C 14 0C 06 00 03 00 00 00 00`** — a clean response frame starting with
+   `0xC8` (`0xC7 + 1`, the request-command-plus-one acknowledgement convention used throughout this protocol).
+3. Encrypted and sent the 4-byte **write** command `stopManualCommand` for output 0 (`B3 02 01 00`, from
+   `FrameManager.poolManualCommand()`) — harmless: it returns filtration to AUTO rather than starting
+   anything. The decrypted notification response was **`B4 02 01 00`**: `0xB4 = 0xB3 + 1`, echoing back our
+   exact `02 01 00` (length, action=stop, output index=0).
+
+This is conclusive: the key, the nonce/CTR handling, and the command frame format are all correct, for both
+reading status and sending a write command that the device parses and acknowledges. What has **not** been
+tested yet is a command that actually changes the physical state of the equipment (e.g. `manualOn`, which
+would start the filtration pump) — that is deliberately held back pending the owner's explicit go-ahead for
+each such test, and the exact byte-level meaning of the status response fields above is not yet mapped.
 
 ## Responsible handling
 

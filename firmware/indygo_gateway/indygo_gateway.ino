@@ -28,7 +28,7 @@
 #define BLE_AUTH_KEY_HEX ""
 #endif
 
-#define FIRMWARE_VERSION "0.7.0-m1a"
+#define FIRMWARE_VERSION "0.7.1-m1a"
 #define HOSTNAME "indygo-gateway"
 #define AP_PASSWORD "indygo-setup"  // default password of the first-connection access point
 #define STA_CONNECT_TIMEOUT_MS 15000
@@ -1185,6 +1185,43 @@ static bool authKeyBytes(uint8_t out[16]) {
   return true;
 }
 
+// Encrypts/decrypts with the session key from the authenticated handshake above (AES-128-CTR-NoPadding, fresh
+// counter per call = the nonce itself, matching the vendor app's per-message Cipher usage). Pure computation,
+// no BLE traffic: used to prepare a command before /dev/ble/write, or to decrypt a notification already in
+// the log. Needs a successful /dev/ble/auth first (the nonce is never accepted as an input - only cached).
+static void handleDevBleCrypto() {
+  if (!devAuth()) return;
+  if (!lastAuthNonceValid) { server.send(409, "application/json", "{\"error\":\"no cached nonce - run /dev/ble/auth first\"}"); return; }
+  uint8_t key[16];
+  if (!authKeyBytes(key)) { server.send(409, "application/json", "{\"error\":\"BLE_AUTH_KEY_HEX not configured\"}"); return; }
+  JsonDocument in;
+  deserializeJson(in, server.arg("plain"));
+  String op = in["op"] | "", hex = in["hex"] | "";
+  if (!(op == "encrypt-ctr" || op == "decrypt-ctr")) { server.send(422, "application/json", "{\"error\":\"op must be encrypt-ctr or decrypt-ctr\"}"); return; }
+  if (hex.length() == 0 || hex.length() % 2 || hex.length() > 488) { server.send(422, "application/json", "{\"error\":\"hex must be an even-length string, max 244 bytes\"}"); return; }
+  uint8_t buf[244];
+  size_t n = hex.length() / 2;
+  for (size_t i = 0; i < n; i++) {
+    char t[3] = {hex[2 * i], hex[2 * i + 1], 0};
+    char *end;
+    long v = strtol(t, &end, 16);
+    if (*end) { server.send(422, "application/json", "{\"error\":\"hex contains non-hex characters\"}"); return; }
+    buf[i] = (uint8_t)v;
+  }
+  uint8_t out[244], counter[16], stream[16];
+  memcpy(counter, lastAuthNonce, 16);
+  size_t ncOff = 0;
+  memset(stream, 0, 16);
+  mbedtls_aes_context aes;
+  mbedtls_aes_init(&aes);
+  mbedtls_aes_setkey_enc(&aes, key, 128);  // CTR mode always uses the encryption schedule, for both directions
+  mbedtls_aes_crypt_ctr(&aes, n, &ncOff, counter, stream, buf, out);
+  mbedtls_aes_free(&aes);
+  JsonDocument doc;
+  doc["hex"] = hexOf(String((const char *)out, n));
+  sendJson(200, doc);
+}
+
 static void handleDevBleAuth() {
   if (!devAuth()) return;
   if (!devClient || !devClient->isConnected()) { server.send(409, "application/json", "{\"error\":\"not connected\"}"); return; }
@@ -1378,6 +1415,7 @@ void setup() {
   server.on("/api/v1/ota", HTTP_POST, otaDone, otaUpload);
   server.on("/api/v1/dev/ble/connect", HTTP_POST, handleDevBleConnect);
   server.on("/api/v1/dev/ble/auth", HTTP_POST, handleDevBleAuth);
+  server.on("/api/v1/dev/ble/crypto", HTTP_POST, handleDevBleCrypto);
   server.on("/api/v1/dev/ble/disconnect", HTTP_POST, handleDevBleDisconnect);
   server.on("/api/v1/dev/ble/services", HTTP_GET, handleDevBleServices);
   server.on("/api/v1/dev/ble/read", HTTP_POST, handleDevBleRead);

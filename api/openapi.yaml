@@ -332,6 +332,29 @@ paths:
             schema: { $ref: '#/components/schemas/BleCharRef' }
       responses:
         '204': { description: Subscribed }
+  /dev/ble/crypto:
+    post:
+      summary: Encrypt or decrypt bytes with the current session's AES-128-CTR key/nonce (no BLE traffic)
+      description: |
+        Pure computation using the key from ble_secrets.h and the nonce cached by the last successful
+        /dev/ble/auth. Each call starts the CTR counter fresh at the nonce (matching the vendor app's
+        per-message behaviour) - encrypt a command before /dev/ble/write, or decrypt a notification already
+        seen in the log. See docs/ble-auth.md for a confirmed end-to-end example (read pool status,
+        send stopManualCommand).
+      security: [ { devPassword: [] } ]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [op, hex]
+              properties:
+                op: { type: string, enum: [encrypt-ctr, decrypt-ctr] }
+                hex: { type: string, description: 'even-length hex, max 244 bytes' }
+      responses:
+        '200': { description: 'Body {hex}' }
+        '409': { description: No cached nonce (run /dev/ble/auth first) or key not configured }
+        '422': { description: Invalid op or hex }
   /dev/ble/write-enable:
     put:
       summary: Unlock (or lock) BLE writes for a limited time

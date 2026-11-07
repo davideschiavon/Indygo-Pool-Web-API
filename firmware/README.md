@@ -1,6 +1,6 @@
 # Firmware
 
-ESP32 firmware: BLE discovery + web UI + REST API. Current version: **0.7.0-m1a**
+ESP32 firmware: BLE discovery + web UI + REST API. Current version: **0.7.1-m1a**
 (`indygo_gateway/indygo_gateway.ino`). It finds and remembers your device but does **not** talk to it
 yet — that needs the protocol work in [../docs/ROADMAP.md](../docs/ROADMAP.md).
 
@@ -87,7 +87,9 @@ Some Solem/Indygo devices (confirmed on a POOL COMMAND VS²) require a nonce/AES
 characteristics are usable - see [../docs/ble-auth.md](../docs/ble-auth.md). The gateway can perform this
 handshake (`POST /api/v1/dev/ble/auth`) if a local, git-ignored `ble_secrets.h` supplies the key (copy
 `ble_secrets.h.example`); **the key itself is not published in this project**. Tested against a real device:
-the handshake completes without error, but full cryptographic confirmation is still open (see the doc).
+the full pipeline is **confirmed working** - a read-status command and a harmless write command
+(`stopManualCommand`) were both sent encrypted and acknowledged correctly. Actually changing equipment state
+(e.g. starting the pump) is held back pending explicit owner go-ahead for each test. See the doc.
 
 ## ESP32-P4 notes (Waveshare ESP32-P4-WIFI6-DEV-KIT)
 
