@@ -1,0 +1,19 @@
+# Never commit vendor material (see docs/methodology.md)
+*.apk
+*.apks
+*.xapk
+*.dex
+*.bin
+*_src/
+decompiled/
+jadx*/
+
+# Build output
+.pio/
+build/
+.vscode/
+*.log
+
+# Local secrets
+secrets.h
+*.env

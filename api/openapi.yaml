@@ -1,0 +1,134 @@
+openapi: 3.0.3
+info:
+  title: Indygo-Pool-Web-API gateway (DRAFT)
+  version: 0.0.1-draft
+  description: |
+    Draft contract for the REST API served by the ESP32 gateway so third-party applications can
+    read and (later) control a connected pool device. **Nothing is implemented yet** and field
+    names may change until milestone M2. Update this file together with any API change.
+    Authentication is disabled by default (LAN use); an optional static token can be enabled in
+    the gateway settings and is then sent as `Authorization: Bearer <token>`.
+servers:
+  - url: http://indygo-gateway.local/api/v1
+paths:
+  /gateway:
+    get:
+      summary: Gateway information (firmware version, Wi-Fi, BLE state)
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Gateway' }
+  /ble/scan:
+    post:
+      summary: Start a BLE scan for compatible devices
+      responses:
+        '202': { description: Scan started }
+    get:
+      summary: Devices found by the last scan
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/BleDevice' }
+  /device:
+    get:
+      summary: Selected pool device (connection state, model, firmware)
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Device' }
+    put:
+      summary: Select the BLE device the gateway should connect to
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                address: { type: string, description: BLE address }
+      responses:
+        '204': { description: Selected }
+  /status:
+    get:
+      summary: Latest measurements and operating state
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Status' }
+  /config:
+    get:
+      summary: Current device configuration
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Config' }
+    put:
+      summary: Change configuration (milestone M3, requires write support enabled)
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Config' }
+      responses:
+        '204': { description: Applied }
+        '403': { description: Write support disabled }
+        '422': { description: Value outside safety limits }
+  /events:
+    get:
+      summary: Server-Sent Events stream of status changes
+      responses:
+        '200':
+          description: text/event-stream
+          content:
+            text/event-stream:
+              schema: { type: string }
+components:
+  schemas:
+    Gateway:
+      type: object
+      properties:
+        firmware: { type: string }
+        uptimeSeconds: { type: integer }
+        wifiRssi: { type: integer }
+        bleConnected: { type: boolean }
+    BleDevice:
+      type: object
+      properties:
+        address: { type: string }
+        name: { type: string }
+        rssi: { type: integer }
+        family: { type: string, enum: [pooltech, sterilor_evo, unknown] }
+    Device:
+      type: object
+      properties:
+        connected: { type: boolean }
+        family: { type: string }
+        model: { type: string }
+        firmware: { type: string }
+    Status:
+      type: object
+      description: Fields depend on the device model; absent when not supported.
+      properties:
+        timestamp: { type: string, format: date-time }
+        ph: { type: number }
+        orp: { type: number, description: mV }
+        saltGramsPerLiter: { type: number }
+        waterTemperatureC: { type: number }
+        mode: { type: string }
+        alarms:
+          type: array
+          items: { type: string }
+    Config:
+      type: object
+      description: Model-dependent setpoints and modes (TBD from protocol work).
+      additionalProperties: true
