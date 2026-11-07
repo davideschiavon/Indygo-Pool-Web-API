@@ -13,6 +13,7 @@ on hardware · ⬜ not started
 | 4 | Vendor Wi-Fi modules expose a local HTTP/JSON API on port 80, discovered via mDNS | ✅ (see [protocol-wifi-local](protocol-wifi-local.md)) |
 | 5 | The same endpoint layout exists on the vendor cloud | ✅ (auth not analysed) |
 | 6 | Pool treatment devices ("IPX" family) reach the cloud through BLE + the phone, not via the Wi-Fi module API | ❓ |
+| 6b | Heat pump control goes through the vendor cloud; lights/colour/pool manual commands can be local (HTTP or BLE) | ✅ (see [app-commands](app-commands.md)) |
 | 7 | Which exact models the maintainers own / which tags each model supports | ⬜ |
 
 ## Milestones

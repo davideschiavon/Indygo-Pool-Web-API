@@ -26,6 +26,7 @@ no cloud account, no login.
 ## Documentation
 
 - [Roadmap and verification status](docs/ROADMAP.md)
+- [Commands in the vendor app and their transports](docs/app-commands.md)
 - [BLE protocol notes](docs/protocol-ble.md)
 - [Vendor Wi-Fi module local HTTP API (reference)](docs/protocol-wifi-local.md)
 - [How the findings were obtained](docs/methodology.md)

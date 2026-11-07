@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 ### Added
+- docs/app-commands.md: heat pump, light/colour and pool manual commands as found in the vendor app,
+  with the transport each one uses (cloud vs local HTTP vs BLE).
 - Demo mode (firmware 0.3.0-m1a): simulated pool controller with invented data to preview the full UI
   (Status with live measurements, Settings, banner). API: `/demo`, `/status`, `/config` (the last two only
   answer in demo mode until the real protocol is implemented; `503` otherwise).
