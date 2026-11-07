@@ -5,8 +5,8 @@ ESP32 firmware: BLE discovery + web UI + REST API. Current version: **0.2.0-m1a*
 yet — that needs the protocol work in [../docs/ROADMAP.md](../docs/ROADMAP.md).
 
 > Status: compiles for the classic ESP32 and for the Waveshare ESP32-P4-WIFI6-DEV-KIT. On the P4 board the
-> firmware boots, but the on-board ESP32-C6 radio did not answer (see *ESP32-P4 notes*), so Wi-Fi/BLE are
-> **not working there yet**. Not yet confirmed working on any hardware — please report what you see.
+> access point was **confirmed visible** from a PC (WPA2, channel 1) after flashing; the web UI and BLE scan
+> have not been tested end to end yet — please report what you see.
 
 ## Build and flash
 
@@ -53,8 +53,12 @@ arduino-cli compile --fqbn esp32:esp32:esp32p4 --board-options ChipVariant=postv
 Use `ChipVariant=postv3` for chip revision v3.x (check with `esptool chip-id`). The core's default SDIO pins
 (CLK 18, CMD 19, D0-D3 14-17, C6 reset 54) match this board.
 
-**Known issue (observed 2026-11-07):** at boot the log shows
-`rpc_core: Response not received for [0x15e](Req_GetCoprocessorFwVersion)` and the MAC reads as zeros, i.e. the
-C6 is not answering as an ESP-Hosted slave, so no access point is visible. Most likely the C6 has no (or an
-incompatible) ESP-Hosted slave firmware. `ESP_HostedOTA` cannot fix this because it needs a working link first;
-the C6 firmware has to be flashed another way. Help welcome.
+**Boot log note (observed 2026-11-07):** the log shows
+`rpc_core: Response not received for [0x15e](Req_GetCoprocessorFwVersion)`. This is only the host asking the
+C6 for its ESP-Hosted firmware version (an older slave firmware does not answer it); Wi-Fi works anyway — the
+access point is visible. If you see real Wi-Fi/BLE failures, updating the C6 slave firmware (esp-hosted-mcu,
+matching the core's host version) is the next thing to try; see the Waveshare wiki FAQ (C6 download mode:
+pull `C6_IO9` low at power-on and use the C6 UART pads).
+
+Note: `WiFi.macAddress()` can read zeros early on this board, so the access point name uses the chip's eFuse MAC
+(`Indygo-Gateway-XXXX`, XXXX = last two bytes).

@@ -339,10 +339,11 @@ static bool connectSta(const String &ssid, const String &pass) {
 }
 
 static void startAp() {
-  uint8_t mac[6];
-  WiFi.macAddress(mac);
+  // Use the chip's eFuse MAC: WiFi.macAddress() can still read zeros here on boards whose radio
+  // is a separate co-processor (e.g. ESP32-P4 + ESP32-C6), which made every name end in 0000.
+  uint64_t efuse = ESP.getEfuseMac();
   char name[32];
-  snprintf(name, sizeof(name), "Indygo-Gateway-%02X%02X", mac[4], mac[5]);
+  snprintf(name, sizeof(name), "Indygo-Gateway-%02X%02X", (uint8_t)(efuse >> 32), (uint8_t)(efuse >> 40));
   apSsid = name;
   WiFi.mode(WIFI_AP_STA);  // AP for the first connection + STA radio so Wi-Fi scans work
   WiFi.softAP(apSsid.c_str(), AP_PASSWORD);
