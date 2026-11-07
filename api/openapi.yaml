@@ -151,8 +151,10 @@ paths:
     post:
       summary: Send a manual command (demo mode only for now)
       description: |
-        Same JSON shape the vendor app passes to its `sendManualCommand`. Output `index` 0 = filtration pump,
-        1 = lighting (ASSUMPTION for the demo). Durations in seconds (assumed). See docs/app-commands.md.
+        Same JSON shape the vendor app passes to its `sendManualCommand`. Output `index`: 0 = filtration,
+        1 = AUX1, 2 = AUX2 (ASSUMPTION for the demo). Durations in seconds (assumed). See docs/app-commands.md.
+        Colour commands only work on an auxiliary configured as `lighting`. `pause` and `backwash` are not part of the
+        simulated POOL COMMAND VS2 and are rejected.
       requestBody:
         content:
           application/json:
@@ -162,30 +164,64 @@ paths:
               properties:
                 command:
                   type: string
-                  enum: [manualOn, stopManualCommand, boost, pause, backwash, colorChange, colorChangeCCEI, colorChangeSeamaid]
-                index: { type: integer, default: 0 }
-                duration: { type: integer, description: 'manualOn 1-86400 s (default 3600); backwash 10-1800 s (default 120)' }
-                boostDuration: { type: integer, description: 'boost 60-604800 s (default 86400)' }
-                pauseDurationInDays: { type: integer, description: 'pause 1-30' }
-                speed: { type: integer, description: 'variable-speed pumps, 1-3 (default 2)' }
+                  enum: [manualOn, stopManualCommand, boost, colorChange, colorChangeCCEI, colorChangeSeamaid]
+                index: { type: integer, enum: [0, 1, 2], default: 0 }
+                duration: { type: integer, description: 'manualOn 1-86400 s (default 3600)' }
+                boostDuration: { type: integer, enum: [86400, 172800], description: 'boost: 24 h or 48 h, only while filtration is AUTO' }
+                speed: { type: integer, description: 'filtration manualOn, 1-3' }
                 mode: { type: integer, description: 'colorChangeCCEI: a CCEI value from the /sim palette; colorChangeSeamaid: 16, 32 or 48' }
       responses:
         '204': { description: Accepted }
-        '422': { description: Unknown command or value out of range }
+        '422': { description: Unknown command, wrong state or value out of range }
         '503': { description: Demo mode off and no device connected }
-  /pool:
+  /filtration:
     put:
-      summary: Set the filtration rule (demo mode only)
+      summary: Set filtration mode and options (demo mode only). Fields are optional; an invalid field rejects the whole request.
+      description: Modes follow the POOL COMMAND VS2 manual (docs/pool-command-vs2.md). Boost is only accepted in AUTO.
       requestBody:
         content:
           application/json:
             schema:
               type: object
               properties:
-                rule: { type: integer, enum: [0, 1, 2], description: '0 time, 1 thermo-adaptive, 2 variable speed pump' }
+                mode: { type: string, enum: [off, 'on', auto] }
+                speed: { type: integer, minimum: 1, maximum: 3 }
+                autoKind: { type: string, enum: [variable, thermo, ranges], description: 'variable speed ranges / thermo-adaptive / time ranges (single-speed pump)' }
+                dailyAdjustHours: { type: integer, minimum: -4, maximum: 4, description: thermo-adaptive daily adjustment }
+                boost: { type: integer, enum: [0, 24, 48], description: 'hours; 0 stops the boost' }
+                ranges:
+                  type: array
+                  maxItems: 8
+                  items:
+                  type: object
+                  properties:
+                    days: { type: integer, minimum: 1, maximum: 127, description: 'bit mask, bit 0 = Monday ... bit 6 = Sunday' }
+                    start: { type: integer, minimum: 0, maximum: 1439, description: minutes from midnight }
+                    end: { type: integer, minimum: 1, maximum: 1440 }
+                    speed: { type: integer, minimum: 1, maximum: 3 }
       responses:
         '204': { description: Applied }
-        '422': { description: Invalid rule }
+        '422': { description: Invalid value or not allowed in the current mode }
+  /aux1:
+    put:
+      summary: Configure/command auxiliary 1 (demo mode only)
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AuxUpdate' }
+      responses:
+        '204': { description: Applied }
+        '422': { description: Invalid value (heat pump type is not supported yet; treatment has OFF/AUTO only) }
+  /aux2:
+    put:
+      summary: Configure/command auxiliary 2 (demo mode only)
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AuxUpdate' }
+      responses:
+        '204': { description: Applied }
+        '422': { description: Invalid value }
   /device:
     get:
       summary: Selected pool device (connection state, model, firmware)
@@ -255,22 +291,61 @@ components:
         wifiRssi: { type: integer }
         bleConnected: { type: boolean }
         scanning: { type: boolean }
+    AuxUpdate:
+      type: object
+      properties:
+        type: { type: string, enum: [lighting, treatment, robot, other], description: Changing the type resets mode and ranges }
+        mode: { type: string, enum: [off, 'on', auto], description: 'treatment accepts off and auto only' }
+        shutterMode: { type: boolean, description: treatment cover mode }
+        shutterRate: { type: integer, minimum: 0, maximum: 60, description: 'minutes per hour while the cover is closed' }
+        ranges:
+          type: array
+          maxItems: 8
+          items:
+            type: object
+            properties:
+              days: { type: integer, minimum: 1, maximum: 127, description: 'bit mask, bit 0 = Monday ... bit 6 = Sunday' }
+              start: { type: integer, minimum: 0, maximum: 1439, description: minutes from midnight }
+              end: { type: integer, minimum: 1, maximum: 1440 }
+              speed: { type: integer, minimum: 1, maximum: 3 }
     Sim:
       type: object
-      description: ILLUSTRATIVE simulated state (demo mode).
+      description: ILLUSTRATIVE simulated POOL COMMAND VS2 state (demo mode). Schedules are stored, not evaluated.
       properties:
         demo: { type: boolean }
         pool:
           type: object
           properties:
-            rule: { type: integer }
-            ruleName: { type: string }
-            state: { type: string, enum: [auto, manualOn, boost, paused, backwash] }
-            remainingSeconds: { type: integer }
+            mode: { type: string, enum: [off, 'on', auto] }
             speed: { type: integer }
+            autoKind: { type: string, enum: [variable, thermo, ranges] }
+            dailyAdjustHours: { type: integer }
+            remainingSeconds: { type: integer, description: timed manual ON }
+            boost:
+              type: object
+              properties:
+                active: { type: boolean }
+                remainingSeconds: { type: integer }
+            running: { type: boolean, nullable: true, description: 'null = AUTO, depends on the (unsimulated) schedule' }
+            forcedBy: { type: string, description: 'e.g. "AUX2 robot" when an auxiliary forces filtration' }
+            ranges: { type: array, items: { type: object } }
+        aux:
+          type: array
+          items:
+            type: object
+            properties:
+              index: { type: integer }
+              type: { type: string }
+              mode: { type: string }
+              remainingSeconds: { type: integer }
+              shutterMode: { type: boolean }
+              shutterRate: { type: integer }
+              note: { type: string }
+              ranges: { type: array, items: { type: object } }
         lighting:
           type: object
           properties:
+            auxIndex: { type: integer, description: '1 or 2, 0 if no auxiliary is set to lighting' }
             on: { type: boolean }
             spotlight: { type: string, enum: [CCEI, Seamaid] }
             color: { type: string }
@@ -284,6 +359,10 @@ components:
                   name: { type: string }
                   value: { type: integer }
                   kind: { type: string, enum: [white, color, level, program, speed, save] }
+        water:
+          type: object
+          properties:
+            temperatureC: { type: number }
     Wifi:
       type: object
       properties:

@@ -1,6 +1,6 @@
 # Firmware
 
-ESP32 firmware: BLE discovery + web UI + REST API. Current version: **0.4.0-m1a**
+ESP32 firmware: BLE discovery + web UI + REST API. Current version: **0.5.0-m1a**
 (`indygo_gateway/indygo_gateway.ino`). It finds and remembers your device but does **not** talk to it
 yet — that needs the protocol work in [../docs/ROADMAP.md](../docs/ROADMAP.md).
 
@@ -54,17 +54,26 @@ equipment, and the field set is *illustrative* (modelled on what the vendor app 
 not a verified protocol. The choice is saved across reboots; untick the box to leave it. API: `GET/PUT /api/v1/demo`;
 `/status` and `/config` answer `503` when no device is connected and demo mode is off.
 
-## Products, Pool and Lighting (preview)
+## Preview of the POOL COMMAND VS2 (demo mode)
 
-The **Products** menu lists the product families of the vendor app (BPC, Pool Box, Pool Guard, AC1, IPX treatment
-devices, relays, ...). Entries marked *Preview* open a demo panel; the rest are listed but not supported yet. The
-heat pump is listed as *not supported yet* on purpose.
+The **Products** menu lists the product families of the vendor app. The entry *POOL COMMAND VS2 (BPC / LRPC)*
+opens the preview; the heat pump is listed as *not supported yet* on purpose.
 
-With Demo mode on, **Pool** offers the app's filtration rule (time / thermo-adaptive / variable speed) and manual
-commands (manualOn, boost, pause, backwash, stop); **Lighting** offers on/off, the colour pulse, and the CCEI
-palette or Seamaid commands with the values the app uses. Everything is simulated; durations, limits and the
-output mapping (index 0 = pump, 1 = light) are assumptions - see [../docs/app-commands.md](../docs/app-commands.md).
-Third-party apps use the same JSON through `POST /api/v1/commands`.
+With Demo mode on:
+
+- **Filtration** follows the manufacturer's manual: OFF, ON (forced, speed 1-3), AUTO (variable-speed ranges,
+  thermo-adaptive with a +/-4 h daily adjustment, or time ranges for single-speed pumps) and BOOST 24/48 h
+  (AUTO only). Up to 8 daily ranges with weekdays and speed.
+- **Auxiliaries** AUX1/AUX2: choose the equipment (lighting, treatment, robot, other) like in the app, then use the
+  modes that equipment has. Safety interlocks are modelled: a robot ON forces filtration, treatment accepts only OFF
+  and AUTO, and cover mode (0-60 min/h) is available for treatment.
+- **Lighting** works on the auxiliary set to *lighting*: on/off, colour pulse, and the CCEI palette or Seamaid
+  commands with the values the app uses.
+
+Everything is simulated; schedules are stored but not evaluated (no clock). Durations, limits and the output mapping
+(index 0 = filtration, 1 = AUX1, 2 = AUX2) are assumptions - see [../docs/app-commands.md](../docs/app-commands.md)
+and [../docs/pool-command-vs2.md](../docs/pool-command-vs2.md). Third-party apps use `PUT /api/v1/filtration`,
+`PUT /api/v1/aux1|aux2` and the app-style `POST /api/v1/commands` (see `api/openapi.yaml`).
 
 ## ESP32-P4 notes (Waveshare ESP32-P4-WIFI6-DEV-KIT)
 

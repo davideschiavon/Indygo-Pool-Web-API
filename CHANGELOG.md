@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 ### Added
+- Firmware 0.5.0-m1a: demo reshaped on the POOL COMMAND VS2 manual: filtration OFF/ON/AUTO (variable speed,
+  thermo-adaptive, time ranges) with BOOST 24/48 h, speeds 1-3, up to 8 ranges; AUX1/AUX2 with equipment types,
+  per-type modes, cover mode and safety interlocks. API: `PUT /filtration`, `PUT /aux1|aux2`; `/commands` now follows the
+  same rules (`pause`/`backwash` rejected, boost 24/48 h only in AUTO). Replaces `PUT /pool`.
 - docs/pool-command-vs2.md: summary of the POOL COMMAND VS² manual (hardware, 3-speed pump contacts, filtration
   and auxiliary modes, Bluetooth/LRMB control). docs/app-commands.md: Aquagem Modbus register map (bus-relay path).
 - Firmware 0.4.0-m1a: Products menu (catalog of the app's product families), Pool and Lighting preview panels with
