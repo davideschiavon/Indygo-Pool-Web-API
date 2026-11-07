@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 ### Added
+- Firmware 0.7.0-m1a: BLE session authentication handshake (`POST /api/v1/dev/ble/auth`, AES-128-ECB nonce
+  response) for Solem/Indygo devices that require it. The AES key is supplied locally via a git-ignored
+  `ble_secrets.h` (see `ble_secrets.h.example`) and is never published or echoed by any endpoint. See
+  docs/ble-auth.md, including results from testing it against a real POOL COMMAND VS².
 - Firmware 0.6.2-m1a: developer tools - password-protected OTA update over Wi-Fi (verified 0.6.0 -> 0.6.2 on an
   ESP32-P4 board), Bluetooth explorer (connect, services, read, listen, write behind a time-limited lock, ring log),
   **Developer** web menu and an *Explore* button in the Bluetooth scan list. `tools/indygo_dev.py` command-line tool.

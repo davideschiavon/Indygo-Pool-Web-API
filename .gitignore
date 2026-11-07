@@ -16,4 +16,5 @@ build/
 
 # Local secrets
 secrets.h
+ble_secrets.h
 *.env

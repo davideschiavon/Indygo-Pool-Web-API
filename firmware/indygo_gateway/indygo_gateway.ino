@@ -19,8 +19,16 @@
 #include <BLEAdvertisedDevice.h>
 #include <Update.h>
 #include <mbedtls/sha256.h>
+#include <mbedtls/aes.h>
 
-#define FIRMWARE_VERSION "0.6.2-m1a"
+#if __has_include("ble_secrets.h")
+#include "ble_secrets.h"
+#endif
+#ifndef BLE_AUTH_KEY_HEX
+#define BLE_AUTH_KEY_HEX ""
+#endif
+
+#define FIRMWARE_VERSION "0.7.0-m1a"
 #define HOSTNAME "indygo-gateway"
 #define AP_PASSWORD "indygo-setup"  // default password of the first-connection access point
 #define STA_CONNECT_TIMEOUT_MS 15000
@@ -897,6 +905,9 @@ static void handleCommand() {
 // ---------- developer tools: password, OTA update, BLE explorer ----------
 // Everything here needs the developer password (header X-Dev-Password). Until a password is set, the tools are
 // disabled. BLE writes are locked by default and must be enabled for a limited time; every write is logged.
+static String lastAuthAddress;          // BLE session auth (docs/ble-auth.md): last authenticated address...
+static uint8_t lastAuthNonce[16];       // ...and the nonce used for it (RAM only, cleared on disconnect/reboot)
+static bool lastAuthNonceValid = false;
 static String devPwHash;                // SHA-256 (hex) of the developer password; empty = tools disabled
 static uint32_t writeEnabledUntil = 0;  // BLE writes allowed until this millis() value (0 = locked)
 
@@ -1049,6 +1060,7 @@ static void handleDevBleDisconnect() {
   if (!devAuth()) return;
   if (devClient && devClient->isConnected()) devClient->disconnect();
   devLinked = false;
+  lastAuthNonceValid = false;
   server.send(204);
 }
 
@@ -1153,6 +1165,73 @@ static void handleDevBleLog() {
     o["seq"] = e.seq; o["ms"] = e.ms; o["dir"] = String(e.dir); o["uuid"] = e.uuid; o["hex"] = e.hex;
   }
   sendJson(200, doc);
+}
+
+// ----- BLE session authentication (see docs/ble-auth.md). The key stays out of version control; it is
+// supplied locally via ble_secrets.h (git-ignored) and is never echoed back by any endpoint. -----
+#define AUTH_MARKER_LEN 14
+static const uint8_t AUTH_MARKER[AUTH_MARKER_LEN] = {0x41, 0x55, 0x54, 0x48, 0x45, 0x4e, 0x54, 0x49, 0x43, 0x41, 0x54, 0x45, 0x44, 0x00};
+
+static bool authKeyBytes(uint8_t out[16]) {
+  String k = BLE_AUTH_KEY_HEX;
+  if (k.length() != 32) return false;
+  for (int i = 0; i < 16; i++) {
+    char t[3] = {k[2 * i], k[2 * i + 1], 0};
+    char *end;
+    long v = strtol(t, &end, 16);
+    if (*end) return false;
+    out[i] = (uint8_t)v;
+  }
+  return true;
+}
+
+static void handleDevBleAuth() {
+  if (!devAuth()) return;
+  if (!devClient || !devClient->isConnected()) { server.send(409, "application/json", "{\"error\":\"not connected\"}"); return; }
+  uint8_t key[16];
+  if (!authKeyBytes(key)) {
+    server.send(409, "application/json", "{\"error\":\"BLE_AUTH_KEY_HEX not configured (see docs/ble-auth.md and ble_secrets.h.example)\"}");
+    return;
+  }
+  JsonDocument in;
+  deserializeJson(in, server.arg("plain"));
+  BLERemoteCharacteristic *c = devFindChar(in);
+  if (!c || !c->canRead()) { server.send(404, "application/json", "{\"error\":\"not connected or auth characteristic not found/readable\"}"); return; }
+  String v = c->readValue();
+  devLogAdd('R', c->getUUID().toString(), (const uint8_t *)v.c_str(), v.length());
+
+  JsonDocument out;
+  String addr = devClient->getPeerAddress().toString();
+  if (v.length() == AUTH_MARKER_LEN && memcmp(v.c_str(), AUTH_MARKER, AUTH_MARKER_LEN) == 0) {
+    bool reused = lastAuthNonceValid && lastAuthAddress == addr;
+    out["authenticated"] = true;
+    out["reused"] = reused;
+    if (!reused) out["note"] = "device reports already authenticated but this gateway has no cached nonce for it (new boot or different session)";
+    sendJson(200, out);
+    return;
+  }
+  if (v.length() != 16) {
+    out["authenticated"] = false;
+    out["error"] = "unexpected nonce length (" + String(v.length()) + " bytes, expected 16)";
+    sendJson(502, out);
+    return;
+  }
+  uint8_t resp[16];
+  mbedtls_aes_context aes;
+  mbedtls_aes_init(&aes);
+  mbedtls_aes_setkey_enc(&aes, key, 128);
+  mbedtls_aes_crypt_ecb(&aes, MBEDTLS_AES_ENCRYPT, (const uint8_t *)v.c_str(), resp);
+  mbedtls_aes_free(&aes);
+  if (!c->canWrite() && !c->canWriteNoResponse()) { server.send(422, "application/json", "{\"error\":\"auth characteristic is not writable\"}"); return; }
+  if (!writesAllowed()) { server.send(403, "application/json", "{\"error\":\"BLE writes are locked; enable them first (PUT /api/v1/dev/ble/write-enable) before authenticating\"}"); return; }
+  devLogAdd('W', c->getUUID().toString(), resp, 16);
+  c->writeValue(resp, 16, c->canWrite());
+  memcpy(lastAuthNonce, v.c_str(), 16);
+  lastAuthAddress = addr;
+  lastAuthNonceValid = true;
+  out["authenticated"] = true;
+  out["reused"] = false;
+  sendJson(200, out);
 }
 
 static void handleWifiGet() {
@@ -1298,6 +1377,7 @@ void setup() {
   server.on("/api/v1/dev/password", HTTP_PUT, handleDevPassword);
   server.on("/api/v1/ota", HTTP_POST, otaDone, otaUpload);
   server.on("/api/v1/dev/ble/connect", HTTP_POST, handleDevBleConnect);
+  server.on("/api/v1/dev/ble/auth", HTTP_POST, handleDevBleAuth);
   server.on("/api/v1/dev/ble/disconnect", HTTP_POST, handleDevBleDisconnect);
   server.on("/api/v1/dev/ble/services", HTTP_GET, handleDevBleServices);
   server.on("/api/v1/dev/ble/read", HTTP_POST, handleDevBleRead);

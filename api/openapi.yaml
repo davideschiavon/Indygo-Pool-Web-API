@@ -281,6 +281,24 @@ paths:
         '200': { description: Connected }
         '502': { description: Could not connect (timeout) }
         '409': { description: Demo mode is on }
+  /dev/ble/auth:
+    post:
+      summary: Perform the BLE session authentication handshake (see docs/ble-auth.md)
+      description: |
+        Reads the authentication characteristic; if it is a fresh nonce, encrypts it AES-128-ECB-NoPadding
+        with the key from the gateway's local ble_secrets.h (never exposed by this API) and writes the
+        response back. Requires BLE writes to be unlocked first. The key is not published in this project;
+        see docs/ble-auth.md for how a maintainer supplies their own locally.
+      security: [ { devPassword: [] } ]
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BleCharRef' }
+      responses:
+        '200': { description: 'Body {authenticated, reused, note?}' }
+        '403': { description: Writes are locked }
+        '409': { description: Not connected, or BLE_AUTH_KEY_HEX not configured }
+        '502': { description: Unexpected nonce length }
   /dev/ble/disconnect:
     post:
       summary: Disconnect the BLE explorer

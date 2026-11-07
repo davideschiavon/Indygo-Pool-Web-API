@@ -1,6 +1,6 @@
 # Firmware
 
-ESP32 firmware: BLE discovery + web UI + REST API. Current version: **0.6.2-m1a**
+ESP32 firmware: BLE discovery + web UI + REST API. Current version: **0.7.0-m1a**
 (`indygo_gateway/indygo_gateway.ino`). It finds and remembers your device but does **not** talk to it
 yet — that needs the protocol work in [../docs/ROADMAP.md](../docs/ROADMAP.md).
 
@@ -80,6 +80,14 @@ Everything is simulated; schedules are stored but not evaluated (no clock). Dura
 (index 0 = filtration, 1 = AUX1, 2 = AUX2) are assumptions - see [../docs/app-commands.md](../docs/app-commands.md)
 and [../docs/pool-command-vs2.md](../docs/pool-command-vs2.md). Third-party apps use `PUT /api/v1/filtration`,
 `PUT /api/v1/aux1|aux2` and the app-style `POST /api/v1/commands` (see `api/openapi.yaml`).
+
+## BLE session authentication (developer tools)
+
+Some Solem/Indygo devices (confirmed on a POOL COMMAND VS²) require a nonce/AES handshake before their data
+characteristics are usable - see [../docs/ble-auth.md](../docs/ble-auth.md). The gateway can perform this
+handshake (`POST /api/v1/dev/ble/auth`) if a local, git-ignored `ble_secrets.h` supplies the key (copy
+`ble_secrets.h.example`); **the key itself is not published in this project**. Tested against a real device:
+the handshake completes without error, but full cryptographic confirmation is still open (see the doc).
 
 ## ESP32-P4 notes (Waveshare ESP32-P4-WIFI6-DEV-KIT)
 
