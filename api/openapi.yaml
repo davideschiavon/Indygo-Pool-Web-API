@@ -222,6 +222,137 @@ paths:
       responses:
         '204': { description: Applied }
         '422': { description: Invalid value }
+  /dev:
+    get:
+      summary: Developer tools state (no password needed)
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  passwordSet: { type: boolean }
+                  bleLinked: { type: boolean }
+                  writeEnabled: { type: boolean }
+                  writeSecondsLeft: { type: integer }
+  /dev/password:
+    put:
+      summary: Set or change the developer password
+      description: Anyone can set the first password; changing it needs `current`. Stored as an unsalted SHA-256 hash.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [password]
+              properties:
+                password: { type: string, minLength: 8, maxLength: 64 }
+                current: { type: string }
+      responses:
+        '204': { description: Saved }
+        '401': { description: Current password wrong }
+        '422': { description: Password length invalid }
+  /ota:
+    post:
+      summary: Install a firmware image over Wi-Fi (developer password required)
+      description: multipart/form-data, field `file` = indygo_gateway.ino.bin. Restarts on success; no automatic rollback.
+      security: [ { devPassword: [] } ]
+      responses:
+        '200': { description: Installed, restarting }
+        '401': { description: Wrong or missing X-Dev-Password }
+        '403': { description: No developer password set yet }
+        '500': { description: Update failed }
+  /dev/ble/connect:
+    post:
+      summary: Connect to a BLE device (developer password; demo mode must be off)
+      security: [ { devPassword: [] } ]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [address]
+              properties:
+                address: { type: string }
+                addrType: { type: integer, enum: [0, 1], description: '0 public, 1 random' }
+      responses:
+        '200': { description: Connected }
+        '502': { description: Could not connect (timeout) }
+        '409': { description: Demo mode is on }
+  /dev/ble/disconnect:
+    post:
+      summary: Disconnect the BLE explorer
+      security: [ { devPassword: [] } ]
+      responses:
+        '204': { description: Done }
+  /dev/ble/services:
+    get:
+      summary: Services and characteristics of the connected device
+      security: [ { devPassword: [] } ]
+      responses:
+        '200': { description: OK }
+        '409': { description: Not connected }
+  /dev/ble/read:
+    post:
+      summary: Read a characteristic (hex)
+      security: [ { devPassword: [] } ]
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BleCharRef' }
+      responses:
+        '200': { description: 'Body {hex}' }
+  /dev/ble/subscribe:
+    post:
+      summary: Listen for notifications/indications on a characteristic (results appear in the log)
+      security: [ { devPassword: [] } ]
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BleCharRef' }
+      responses:
+        '204': { description: Subscribed }
+  /dev/ble/write-enable:
+    put:
+      summary: Unlock (or lock) BLE writes for a limited time
+      security: [ { devPassword: [] } ]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                enabled: { type: boolean }
+                minutes: { type: integer, minimum: 1, maximum: 30 }
+      responses:
+        '204': { description: Done }
+  /dev/ble/write:
+    post:
+      summary: Write bytes to a characteristic (only while writes are unlocked; always logged)
+      security: [ { devPassword: [] } ]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                service: { type: string }
+                characteristic: { type: string }
+                hex: { type: string, description: 'even-length hex, max 244 bytes' }
+                response: { type: boolean, default: true }
+      responses:
+        '204': { description: Written }
+        '403': { description: Writes are locked }
+  /dev/ble/log:
+    get:
+      summary: BLE explorer log (connects, reads, notifications, writes)
+      security: [ { devPassword: [] } ]
+      parameters:
+        - { name: since, in: query, schema: { type: integer }, description: only entries with a higher sequence number }
+      responses:
+        '200': { description: 'Body {last, entries[{seq,ms,dir,uuid,hex}]}, dir: C connect, R read, N notify, W write' }
   /device:
     get:
       summary: Selected pool device (connection state, model, firmware)
@@ -282,7 +413,17 @@ paths:
             text/event-stream:
               schema: { type: string }
 components:
+  securitySchemes:
+    devPassword:
+      type: apiKey
+      in: header
+      name: X-Dev-Password
   schemas:
+    BleCharRef:
+      type: object
+      properties:
+        service: { type: string }
+        characteristic: { type: string }
     Gateway:
       type: object
       properties:

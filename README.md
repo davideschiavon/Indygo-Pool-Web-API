@@ -21,6 +21,7 @@ no cloud account, no login.
 |------|---------|
 | `docs/` | Protocol notes, architecture, roadmap |
 | `api/openapi.yaml` | **Draft** REST API for third-party apps (the gateway's contract) |
+| `tools/` | `indygo_dev.py`: command-line tool for OTA updates and the Bluetooth explorer |
 | `firmware/` | ESP32 firmware: first-connection access point, Wi-Fi + Bluetooth-scan web menus (see its README) |
 
 ## Documentation
@@ -31,6 +32,7 @@ no cloud account, no login.
 - [BLE protocol notes](docs/protocol-ble.md)
 - [Vendor Wi-Fi module local HTTP API (reference)](docs/protocol-wifi-local.md)
 - [How the findings were obtained](docs/methodology.md)
+- [Developer tools: OTA update and Bluetooth explorer](docs/developer-tools.md)
 - [Draft gateway API](api/openapi.yaml)
 
 ## Contributing

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 ### Added
+- Firmware 0.6.2-m1a: developer tools - password-protected OTA update over Wi-Fi (verified 0.6.0 -> 0.6.2 on an
+  ESP32-P4 board), Bluetooth explorer (connect, services, read, listen, write behind a time-limited lock, ring log),
+  **Developer** web menu and an *Explore* button in the Bluetooth scan list. `tools/indygo_dev.py` command-line tool.
+  Scan results now include `addrType`. See docs/developer-tools.md.
 - Firmware 0.5.0-m1a: demo reshaped on the POOL COMMAND VS2 manual: filtration OFF/ON/AUTO (variable speed,
   thermo-adaptive, time ranges) with BOOST 24/48 h, speeds 1-3, up to 8 ranges; AUX1/AUX2 with equipment types,
   per-type modes, cover mode and safety interlocks. API: `PUT /filtration`, `PUT /aux1|aux2`; `/commands` now follows the

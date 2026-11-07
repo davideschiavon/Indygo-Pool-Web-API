@@ -1,6 +1,6 @@
 # Firmware
 
-ESP32 firmware: BLE discovery + web UI + REST API. Current version: **0.5.0-m1a**
+ESP32 firmware: BLE discovery + web UI + REST API. Current version: **0.6.2-m1a**
 (`indygo_gateway/indygo_gateway.ino`). It finds and remembers your device but does **not** talk to it
 yet — that needs the protocol work in [../docs/ROADMAP.md](../docs/ROADMAP.md).
 
@@ -42,6 +42,12 @@ Open **Bluetooth devices → Scan**. Devices that look like Indygo/Solem pool eq
 (`pooltech`, `sterilor_evo`, `solem_ipx`), with their advertised name, services and manufacturer data.
 Select yours; the choice is saved. **Please share what your device shows** (without serial/MAC) in an issue —
 it is the fastest way to finish the protocol notes.
+
+## Updating without USB, and the Bluetooth explorer
+
+Once the firmware with developer tools is on the board, later versions can be installed over Wi-Fi, and a real
+device's Bluetooth services can be explored from the **Developer** menu or `tools/indygo_dev.py`. Read
+[../docs/developer-tools.md](../docs/developer-tools.md) first (password, limits, write lock).
 
 ## Demo mode
 

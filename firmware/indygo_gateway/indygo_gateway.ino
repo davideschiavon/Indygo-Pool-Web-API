@@ -17,8 +17,10 @@
 #include <BLEDevice.h>
 #include <BLEScan.h>
 #include <BLEAdvertisedDevice.h>
+#include <Update.h>
+#include <mbedtls/sha256.h>
 
-#define FIRMWARE_VERSION "0.5.0-m1a"
+#define FIRMWARE_VERSION "0.6.2-m1a"
 #define HOSTNAME "indygo-gateway"
 #define AP_PASSWORD "indygo-setup"  // default password of the first-connection access point
 #define STA_CONNECT_TIMEOUT_MS 15000
@@ -36,6 +38,7 @@ struct Range {
 };
 
 struct BleEntry {
+  uint8_t addrType = 0;  // BLE address type (0 public, 1 random)
   String address;
   String name;
   int rssi;
@@ -109,6 +112,7 @@ class ScanCallbacks : public BLEAdvertisedDeviceCallbacks {
     }
     BleEntry &e = devices[idx];
     e.rssi = dev.getRSSI();
+    e.addrType = (uint8_t)dev.getAddressType();
     if (dev.haveName()) e.name = dev.getName();
     String svc;
     for (int i = 0; i < dev.getServiceUUIDCount(); i++) {
@@ -165,7 +169,8 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
 <button id="t-aux" onclick="tab('aux')">Auxiliaries</button>
 <button id="t-lighting" onclick="tab('lighting')">Lighting</button>
 <button id="t-settings" onclick="tab('settings')">Settings</button>
-<button id="t-wifi" onclick="tab('wifi')">Wi-Fi</button></nav>
+<button id="t-wifi" onclick="tab('wifi')">Wi-Fi</button>
+<button id="t-dev" onclick="tab('dev')">Developer</button></nav>
 <main>
 <section id="status" class="card"><h3>Selected pool device</h3><div id="sel">Loading...</div>
 <p class="muted">Open the <b>Bluetooth devices</b> menu to find and select your device.</p>
@@ -213,6 +218,31 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
  <div id="lt-pal"></div>
  <p class="muted">CCEI values and Seamaid modes are those used by the vendor app. Grouping of the CCEI entries is my reading of the app and may change.</p></div></div></section>
 
+<section id="dev" class="hide">
+ <div class="card"><h3>Developer tools</h3>
+  <p class="muted" id="dev-state">Loading...</p>
+  <label>Developer password (kept only for this browser tab)</label>
+  <input id="dev-pw" type="password" autocomplete="off"><button class="btn" onclick="savePw()">Use this password</button>
+  <label>Set or change the password (8-64 characters; the current one is sent as proof)</label>
+  <input id="dev-new" type="password" autocomplete="off"><button class="btn" onclick="setPw()">Save new password</button>
+  <p class="muted" id="dev-msg"></p>
+  <p class="muted">Anyone who knows this password can replace the firmware and talk to your equipment through this device. Use a strong one and do not expose the gateway to the internet.</p></div>
+ <div class="card"><h3>Firmware update (over Wi-Fi)</h3>
+  <p class="muted">Choose the application image <b>indygo_gateway.ino.bin</b> (not the merged or bootloader files). The gateway restarts when done. If a bad image is installed you will need a USB cable to recover.</p>
+  <input id="ota-file" type="file" accept=".bin"><button class="btn" onclick="otaGo()">Upload and install</button></div>
+ <div class="card"><h3>Bluetooth explorer</h3>
+  <p class="muted">Connect to a device found by the Bluetooth scan (use <b>Explore</b> there). Demo mode must be off. Reading and listening are always possible; <b>writing is locked</b> until you enable it for a few minutes, and every write is logged.</p>
+  <label>Address</label><input id="ble-addr" placeholder="aa:bb:cc:dd:ee:ff">
+  <label>Address type</label><select id="ble-type"><option value="0">0 - public</option><option value="1">1 - random</option></select>
+  <p><button class="btn" onclick="bleConn()">Connect</button> <button class="btn alt" onclick="bleDisc()">Disconnect</button>
+  <button class="btn" onclick="bleSvc()">Load services</button></p>
+  <div id="ble-svc" class="muted"></div>
+  <label>Hex bytes to write</label><input id="ble-hex" placeholder="e.g. 0204 00">
+  <p><button class="btn" onclick="bleWE(true)">Enable writes (10 min)</button> <button class="btn alt" onclick="bleWE(false)">Lock writes</button></p>
+  <label>Log (reads, notifications, writes)</label>
+  <textarea id="ble-log" rows="10" style="width:100%;box-sizing:border-box;font-family:monospace;font-size:12px" readonly></textarea></div>
+</section>
+
 <section id="settings" class="hide"><div class="card"><h3>Settings</h3>
  <div id="cfgmsg" class="muted">No device connected. Select a device, or enable demo mode on the Status page.</div>
  <div id="cfgform" class="hide">
@@ -246,8 +276,8 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(<!doctype html>
  brings its own access point back so you can try again.</p></div>
 </section></main>
 <script>
-const $=id=>document.getElementById(id);let poll,wpoll;const T=['status','products','pool','aux','lighting','ble','settings','wifi'];
-function tab(t){for(const s of T){$(s).classList.toggle('hide',s!==t);$('t-'+s).classList.toggle('on',s===t)}if(t==='status'){loadSel();loadNet();live()}if(t==='wifi')loadNet();if(t==='settings')loadCfg();if(t==='products')loadCat();if(t==='pool'||t==='aux'||t==='lighting')loadSim()}
+const $=id=>document.getElementById(id);let poll,wpoll;const T=['status','products','pool','aux','lighting','ble','settings','wifi','dev'];
+function tab(t){for(const s of T){$(s).classList.toggle('hide',s!==t);$('t-'+s).classList.toggle('on',s===t)}if(t==='status'){loadSel();loadNet();live()}if(t==='wifi')loadNet();if(t==='settings')loadCfg();if(t==='products')loadCat();if(t==='pool'||t==='aux'||t==='lighting')loadSim();if(t==='dev')loadDev()}
 async function j(u,o){const r=await fetch(u,o);if(!r.ok)throw new Error(r.status);return r.status===204?null:r.json()}
 async function loadSel(){const d=await j('/api/v1/device');$('sel').textContent=d.address?((d.name||'(no name)')+' - '+d.address):'None selected yet.'}
 async function loadNet(){const w=await j('/api/v1/wifi');
@@ -258,11 +288,11 @@ async function refresh(){const d=await j('/api/v1/ble/scan');$('state').textCont
  const rows=d.devices.slice().sort((a,b)=>(b.family!=='unknown')-(a.family!=='unknown')||b.rssi-a.rssi);
  $('rows').innerHTML=rows.length?'':'<tr><td colspan="5" class="muted">Nothing found.</td></tr>';
  for(const x of rows){const tr=document.createElement('tr');if(x.family!=='unknown')tr.className='pool';
-  tr.innerHTML='<td></td><td></td><td></td><td><span class="tag"></span></td><td><button class="btn">Select</button></td>';
+  tr.innerHTML='<td></td><td></td><td></td><td><span class="tag"></span></td><td><button class="btn">Select</button> <button class="btn alt">Explore</button></td>';
   const c=tr.children;c[0].textContent=x.name||'(no name)';c[1].textContent=x.address;c[2].textContent=x.rssi;
   c[3].firstChild.textContent=x.family;c[3].firstChild.classList.add(x.family);
   c[4].firstChild.onclick=async()=>{await j('/api/v1/device',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({address:x.address,name:x.name})});tab('status')};
-  $('rows').appendChild(tr)}
+  c[4].children[1].onclick=()=>{$('ble-addr').value=x.address;$('ble-type').value=x.addrType||0;tab('dev')};$('rows').appendChild(tr)}
  if(!d.scanning){clearInterval(poll);$('scan').disabled=false}}
 async function wscan(){$('wscan').disabled=true;$('wstate').textContent='Scanning...';await j('/api/v1/wifi/scan',{method:'POST'});wpoll=setInterval(wrefresh,1500)}
 async function wrefresh(){const d=await j('/api/v1/wifi/scan');if(d.scanning)return;clearInterval(wpoll);$('wscan').disabled=false;
@@ -332,6 +362,34 @@ function drawPalette(){const box=$('lt-pal');box.innerHTML='';if(!SIM||!SIM.ligh
  let last='';for(const c of SIM.lighting.palette){if(c.kind!==last){last=c.kind;const h=document.createElement('div');h.className='muted';h.style.marginTop='8px';h.textContent=c.kind;box.appendChild(h)}
   const b=document.createElement('button');b.className='btn';b.style.cssText='margin:3px;'+(CSS[c.name]?'background:'+CSS[c.name]+';color:'+(['White','Hot white','Cyan','Pink','Favorite','Lagoon'].includes(c.name)?'#14232b':'#fff')+';border:1px solid #0003':'');
   b.textContent=c.name;b.onclick=()=>lightCmd('colorChangeCCEI',{mode:c.value});box.appendChild(b)}}
+let LOGSEQ=0,LOGTMR=null;
+function PW(){try{return sessionStorage.getItem('devpw')||''}catch(e){return ''}}
+async function dj(u,o){o=o||{};o.headers=Object.assign({'X-Dev-Password':PW()},o.headers||{});const r=await fetch(u,o);const t=await r.text();let b=null;try{b=JSON.parse(t)}catch(e){}if(!r.ok)throw new Error((b&&b.error)||r.status);return b}
+async function loadDev(){const d=await j('/api/v1/dev');$('dev-state').textContent=(d.passwordSet?'Developer password is set.':'No developer password yet: choose one below to enable the tools.')+' BLE link: '+(d.bleLinked?'connected':'no')+' - writes: '+(d.writeEnabled?'ENABLED ('+d.writeSecondsLeft+' s left)':'locked');$('dev-pw').value=PW();
+ if(!LOGTMR)LOGTMR=setInterval(()=>{if(!$('dev').classList.contains('hide'))pollLog()},1500)}
+function savePw(){try{sessionStorage.setItem('devpw',$('dev-pw').value)}catch(e){}$('dev-msg').textContent='Password remembered for this tab.';loadDev()}
+async function setPw(){const n=$('dev-new').value;try{await dj('/api/v1/dev/password',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:n,current:PW()})});try{sessionStorage.setItem('devpw',n)}catch(e){}$('dev-msg').textContent='Password saved.'}catch(e){$('dev-msg').textContent='Error: '+e.message}loadDev()}
+async function otaGo(){const f=$('ota-file').files[0];if(!f){$('dev-msg').textContent='Choose the .bin file first.';return}
+ const fd=new FormData();fd.append('file',f);$('dev-msg').textContent='Uploading '+f.size+' bytes...';
+ try{await dj('/api/v1/ota',{method:'POST',body:fd});$('dev-msg').textContent='Update installed. The gateway is restarting: reload this page in about 30 seconds.'}catch(e){$('dev-msg').textContent='Update failed: '+e.message}}
+function devPost(u,o){return dj(u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(o)})}
+async function bleConn(){$('dev-msg').textContent='Connecting...';try{const r=await devPost('/api/v1/dev/ble/connect',{address:$('ble-addr').value.trim(),addrType:+$('ble-type').value});$('dev-msg').textContent='Connected.';bleSvc()}catch(e){$('dev-msg').textContent='Connect failed: '+e.message}loadDev()}
+async function bleDisc(){try{await devPost('/api/v1/dev/ble/disconnect',{})}catch(e){}$('ble-svc').textContent='';loadDev()}
+async function bleSvc(){const box=$('ble-svc');box.textContent='';let d;try{d=await dj('/api/v1/dev/ble/services')}catch(e){box.textContent='Error: '+e.message;return}
+ for(const s of d.services){const h=document.createElement('div');h.style.marginTop='8px';const b=document.createElement('b');b.textContent='Service '+s.uuid;h.appendChild(b);box.appendChild(h);
+  for(const c of s.characteristics){const r=document.createElement('div');r.style.cssText='padding:4px 0 4px 12px';
+   const p=[c.read&&'read',c.write&&'write',c.writeNoResponse&&'write-no-resp',c.notify&&'notify',c.indicate&&'indicate'].filter(Boolean).join(', ');
+   r.appendChild(document.createTextNode(c.uuid+'  ['+p+']  '));
+   const mk=(t,f)=>{const bt=document.createElement('button');bt.className='btn';bt.style.cssText='padding:3px 8px;margin-right:4px';bt.textContent=t;bt.onclick=f;r.appendChild(bt)};
+   if(c.read)mk('Read',()=>devPost('/api/v1/dev/ble/read',{service:s.uuid,characteristic:c.uuid}).then(pollLog).catch(e=>$('dev-msg').textContent='Read failed: '+e.message));
+   if(c.notify||c.indicate)mk('Listen',()=>devPost('/api/v1/dev/ble/subscribe',{service:s.uuid,characteristic:c.uuid}).then(()=>$('dev-msg').textContent='Listening on '+c.uuid).catch(e=>$('dev-msg').textContent='Subscribe failed: '+e.message));
+   if(c.write||c.writeNoResponse)mk('Write hex',()=>devPost('/api/v1/dev/ble/write',{service:s.uuid,characteristic:c.uuid,hex:$('ble-hex').value.replace(/\s+/g,''),response:!!c.write}).then(()=>{$('dev-msg').textContent='Written.';pollLog()}).catch(e=>$('dev-msg').textContent='Write failed: '+e.message));
+   box.appendChild(r)}}}
+async function bleWE(on){try{await dj('/api/v1/dev/ble/write-enable',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:on,minutes:10})})}catch(e){$('dev-msg').textContent='Error: '+e.message}loadDev()}
+async function pollLog(){let d;try{d=await dj('/api/v1/dev/ble/log?since='+LOGSEQ)}catch(e){return}
+ if(d.last<LOGSEQ){LOGSEQ=0;$('ble-log').value=''}
+ for(const e of d.entries){$('ble-log').value+='['+e.ms+' ms] '+e.dir+' '+e.uuid+' '+e.hex+'\n';LOGSEQ=e.seq}
+ $('ble-log').scrollTop=$('ble-log').scrollHeight}
 async function loadDemo(){const d=await j('/api/v1/demo');$('demoSw').checked=d.enabled;$('demo').classList.toggle('hide',!d.enabled)}
 async function setDemo(on){await j('/api/v1/demo',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:on})});loadDemo();loadSel();live();loadCfg()}
 const LBL=[['ph','pH',''],['orp','ORP',' mV'],['saltGramsPerLiter','Salt',' g/L'],['waterTemperatureC','Water temperature',' °C'],['productionPercent','Chlorine production',' %'],['mode','Mode',''],['boostRemainingMinutes','Boost remaining',' min'],['winterMode','Winter mode','']];
@@ -390,6 +448,7 @@ static void handleScanResults() {
     o["family"] = devices[i].family;
     o["services"] = devices[i].services;
     o["manufacturerData"] = devices[i].manufacturer;
+    o["addrType"] = devices[i].addrType;
   }
   sendJson(200, doc);
 }
@@ -835,6 +894,267 @@ static void handleCommand() {
   server.send(204);
 }
 
+// ---------- developer tools: password, OTA update, BLE explorer ----------
+// Everything here needs the developer password (header X-Dev-Password). Until a password is set, the tools are
+// disabled. BLE writes are locked by default and must be enabled for a limited time; every write is logged.
+static String devPwHash;                // SHA-256 (hex) of the developer password; empty = tools disabled
+static uint32_t writeEnabledUntil = 0;  // BLE writes allowed until this millis() value (0 = locked)
+
+static String sha256Hex(const String &s) {
+  uint8_t h[32];
+  mbedtls_sha256((const unsigned char *)s.c_str(), s.length(), h, 0);
+  char b[65];
+  for (int i = 0; i < 32; i++) snprintf(b + 2 * i, 3, "%02x", h[i]);
+  return String(b);
+}
+
+static bool devAuthOk() { return devPwHash.length() && sha256Hex(server.header("X-Dev-Password")) == devPwHash; }
+
+static bool devAuth() {
+  if (!devPwHash.length()) {
+    server.send(403, "application/json", "{\"error\":\"developer password not set (PUT /api/v1/dev/password)\"}");
+    return false;
+  }
+  if (!devAuthOk()) {
+    delay(1000);  // slow down guessing
+    server.send(401, "application/json", "{\"error\":\"wrong or missing X-Dev-Password\"}");
+    return false;
+  }
+  return true;
+}
+
+static bool writesAllowed() { return writeEnabledUntil && (int32_t)(writeEnabledUntil - millis()) > 0; }
+
+#define DEV_LOG_SIZE 80
+struct DevLogEntry { uint32_t seq = 0, ms = 0; char dir = ' '; String uuid, hex; };
+static DevLogEntry devLog[DEV_LOG_SIZE];
+static uint32_t devLogSeq = 0;
+static BLEClient *devClient = nullptr;
+static volatile bool devLinked = false;
+
+static void devLogAdd(char dir, const String &uuid, const uint8_t *d, size_t n) {
+  DevLogEntry &e = devLog[devLogSeq % DEV_LOG_SIZE];
+  e.seq = ++devLogSeq; e.ms = millis(); e.dir = dir; e.uuid = uuid;
+  String h;
+  char b[3];
+  for (size_t i = 0; i < n && i < 256; i++) { snprintf(b, sizeof(b), "%02x", d[i]); h += b; }
+  e.hex = h;
+}
+
+class DevClientCb : public BLEClientCallbacks {
+  void onConnect(BLEClient *) override {}
+  void onDisconnect(BLEClient *) override { devLinked = false; }
+};
+static DevClientCb devClientCb;
+
+static void handleDevStatus() {  // no password needed: says only whether the tools are enabled
+  JsonDocument doc;
+  doc["passwordSet"] = devPwHash.length() > 0;
+  doc["bleLinked"] = (bool)devLinked;
+  doc["writeEnabled"] = writesAllowed();
+  doc["writeSecondsLeft"] = writesAllowed() ? (int)((writeEnabledUntil - millis()) / 1000) : 0;
+  sendJson(200, doc);
+}
+
+static void handleDevPassword() {
+  JsonDocument in;
+  if (deserializeJson(in, server.arg("plain"))) { server.send(400, "application/json", "{\"error\":\"invalid JSON\"}"); return; }
+  String pw = in["password"] | "";
+  if (pw.length() < 8 || pw.length() > 64) { server.send(422, "application/json", "{\"error\":\"password must be 8-64 characters\"}"); return; }
+  if (devPwHash.length() && sha256Hex(in["current"] | "") != devPwHash) {
+    delay(1000);
+    server.send(401, "application/json", "{\"error\":\"current password is wrong\"}");
+    return;
+  }
+  devPwHash = sha256Hex(pw);
+  prefs.putString("devpw", devPwHash);
+  server.send(204);
+}
+
+// ----- OTA: POST /api/v1/ota (multipart/form-data, field "file" = the app .bin) -----
+static bool otaAllowed = false, otaFailed = false;
+static void otaUpload() {
+  HTTPUpload &u = server.upload();
+  if (u.status == UPLOAD_FILE_START) {
+    otaAllowed = devAuthOk();
+    otaFailed = false;
+    if (otaAllowed && !Update.begin(UPDATE_SIZE_UNKNOWN)) otaFailed = true;
+  } else if (u.status == UPLOAD_FILE_WRITE) {
+    if (otaAllowed && !otaFailed && Update.write(u.buf, u.currentSize) != u.currentSize) otaFailed = true;
+  } else if (u.status == UPLOAD_FILE_END) {
+    if (otaAllowed && !otaFailed && !Update.end(true)) otaFailed = true;
+  } else if (u.status == UPLOAD_FILE_ABORTED) {
+    if (otaAllowed) Update.abort();
+  }
+}
+static void otaDone() {
+  if (!otaAllowed) {
+    delay(1000);
+    server.send(devPwHash.length() ? 401 : 403, "application/json", "{\"error\":\"developer password missing, wrong or not set\"}");
+    return;
+  }
+  if (otaFailed || Update.hasError()) {
+    server.send(500, "application/json", String("{\"error\":\"update failed: ") + Update.errorString() + "\"}");
+    return;
+  }
+  server.send(200, "application/json", "{\"ok\":true,\"restarting\":true}");
+  restartAtMs = millis() + 1500;
+}
+
+// ----- BLE explorer -----
+static String hexOf(const String &v) {
+  String h;
+  char b[3];
+  for (size_t i = 0; i < v.length(); i++) { snprintf(b, sizeof(b), "%02x", (uint8_t)v[i]); h += b; }
+  return h;
+}
+
+static BLERemoteCharacteristic *devFindChar(JsonDocument &in) {
+  if (!devClient || !devClient->isConnected()) return nullptr;
+  String s = in["service"] | "", c = in["characteristic"] | "";
+  BLERemoteService *svc = devClient->getService(BLEUUID(s));
+  return svc ? svc->getCharacteristic(BLEUUID(c)) : nullptr;
+}
+
+static void handleDevBleConnect() {
+  if (!devAuth()) return;
+  JsonDocument in;
+  if (deserializeJson(in, server.arg("plain")) || !in["address"].is<const char *>()) {
+    server.send(400, "application/json", "{\"error\":\"body must be {\\\"address\\\":\\\"..\\\",\\\"addrType\\\":0|1}\"}");
+    return;
+  }
+  if (demoMode) { server.send(409, "application/json", "{\"error\":\"turn demo mode off first\"}"); return; }
+  bleScan->stop();
+  scanning = false;
+  if (devClient && devClient->isConnected()) devClient->disconnect();
+  if (!devClient) {
+    devClient = BLEDevice::createClient();
+    devClient->setClientCallbacks(&devClientCb);
+  }
+  String addr = in["address"].as<String>();
+  int type = in["addrType"] | 0;
+#if defined(CONFIG_BLUEDROID_ENABLED)
+  bool ok = devClient->connect(BLEAddress(addr), (esp_ble_addr_type_t)type, 10000);  // classic ESP32 (Bluedroid), 10 s timeout
+#else
+  bool ok = devClient->connect(BLEAddress(addr), (uint8_t)type, 10000);  // NimBLE (e.g. ESP32-P4 + C6 over ESP-Hosted), 10 s timeout
+#endif
+  devLinked = ok;
+  if (ok) devLogAdd('C', addr, nullptr, 0);
+  JsonDocument out;
+  out["connected"] = ok;
+  sendJson(ok ? 200 : 502, out);
+}
+
+static void handleDevBleDisconnect() {
+  if (!devAuth()) return;
+  if (devClient && devClient->isConnected()) devClient->disconnect();
+  devLinked = false;
+  server.send(204);
+}
+
+static void handleDevBleServices() {
+  if (!devAuth()) return;
+  if (!devClient || !devClient->isConnected()) { server.send(409, "application/json", "{\"error\":\"not connected\"}"); return; }
+  JsonDocument doc;
+  JsonArray arr = doc["services"].to<JsonArray>();
+  auto *svcs = devClient->getServices();
+  if (svcs) {
+    for (auto &kv : *svcs) {
+      JsonObject so = arr.add<JsonObject>();
+      so["uuid"] = kv.second->getUUID().toString();
+      JsonArray chs = so["characteristics"].to<JsonArray>();
+      auto *cm = kv.second->getCharacteristics();
+      if (!cm) continue;
+      for (auto &ck : *cm) {
+        BLERemoteCharacteristic *c = ck.second;
+        JsonObject co = chs.add<JsonObject>();
+        co["uuid"] = c->getUUID().toString();
+        co["read"] = c->canRead();
+        co["write"] = c->canWrite();
+        co["writeNoResponse"] = c->canWriteNoResponse();
+        co["notify"] = c->canNotify();
+        co["indicate"] = c->canIndicate();
+      }
+    }
+  }
+  sendJson(200, doc);
+}
+
+static void handleDevBleRead() {
+  if (!devAuth()) return;
+  JsonDocument in;
+  deserializeJson(in, server.arg("plain"));
+  BLERemoteCharacteristic *c = devFindChar(in);
+  if (!c) { server.send(404, "application/json", "{\"error\":\"not connected or characteristic not found\"}"); return; }
+  if (!c->canRead()) { server.send(422, "application/json", "{\"error\":\"characteristic is not readable\"}"); return; }
+  String v = c->readValue();
+  devLogAdd('R', c->getUUID().toString(), (const uint8_t *)v.c_str(), v.length());
+  JsonDocument out;
+  out["hex"] = hexOf(v);
+  sendJson(200, out);
+}
+
+static void handleDevBleSubscribe() {
+  if (!devAuth()) return;
+  JsonDocument in;
+  deserializeJson(in, server.arg("plain"));
+  BLERemoteCharacteristic *c = devFindChar(in);
+  if (!c) { server.send(404, "application/json", "{\"error\":\"not connected or characteristic not found\"}"); return; }
+  if (!c->canNotify() && !c->canIndicate()) { server.send(422, "application/json", "{\"error\":\"characteristic cannot notify\"}"); return; }
+  c->registerForNotify([](BLERemoteCharacteristic *ch, uint8_t *d, size_t n, bool) { devLogAdd('N', ch->getUUID().toString(), d, n); });
+  server.send(204);
+}
+
+static void handleDevBleWriteEnable() {
+  if (!devAuth()) return;
+  JsonDocument in;
+  deserializeJson(in, server.arg("plain"));
+  bool en = in["enabled"] | false;
+  int minutes = in["minutes"] | 10;
+  if (minutes < 1 || minutes > 30) { server.send(422, "application/json", "{\"error\":\"minutes must be 1-30\"}"); return; }
+  writeEnabledUntil = en ? millis() + minutes * 60000UL : 0;
+  server.send(204);
+}
+
+static void handleDevBleWrite() {
+  if (!devAuth()) return;
+  if (!writesAllowed()) { server.send(403, "application/json", "{\"error\":\"BLE writes are locked; enable them first (PUT /api/v1/dev/ble/write-enable)\"}"); return; }
+  JsonDocument in;
+  deserializeJson(in, server.arg("plain"));
+  BLERemoteCharacteristic *c = devFindChar(in);
+  if (!c) { server.send(404, "application/json", "{\"error\":\"not connected or characteristic not found\"}"); return; }
+  String hex = in["hex"] | "";
+  if (hex.length() == 0 || hex.length() % 2 || hex.length() > 488) { server.send(422, "application/json", "{\"error\":\"hex must be an even-length string, max 244 bytes\"}"); return; }
+  uint8_t buf[244];
+  size_t n = hex.length() / 2;
+  for (size_t i = 0; i < n; i++) {
+    char t[3] = {hex[2 * i], hex[2 * i + 1], 0};
+    char *end;
+    long v = strtol(t, &end, 16);
+    if (*end) { server.send(422, "application/json", "{\"error\":\"hex contains non-hex characters\"}"); return; }
+    buf[i] = (uint8_t)v;
+  }
+  bool resp = in["response"] | true;
+  devLogAdd('W', c->getUUID().toString(), buf, n);
+  c->writeValue(buf, n, resp);
+  server.send(204);
+}
+
+static void handleDevBleLog() {
+  if (!devAuth()) return;
+  uint32_t since = server.hasArg("since") ? (uint32_t)server.arg("since").toInt() : 0;
+  JsonDocument doc;
+  doc["last"] = devLogSeq;
+  JsonArray arr = doc["entries"].to<JsonArray>();
+  uint32_t first = devLogSeq > DEV_LOG_SIZE ? devLogSeq - DEV_LOG_SIZE + 1 : 1;
+  for (uint32_t s = max(first, since + 1); s <= devLogSeq; s++) {
+    const DevLogEntry &e = devLog[(s - 1) % DEV_LOG_SIZE];
+    JsonObject o = arr.add<JsonObject>();
+    o["seq"] = e.seq; o["ms"] = e.ms; o["dir"] = String(e.dir); o["uuid"] = e.uuid; o["hex"] = e.hex;
+  }
+  sendJson(200, doc);
+}
+
 static void handleWifiGet() {
   JsonDocument doc;
   doc["mode"] = apMode ? "ap" : "sta";
@@ -945,6 +1265,7 @@ void setup() {
   selAddress = prefs.getString("addr", "");
   selName = prefs.getString("name", "");
   demoMode = prefs.getBool("demo", false);
+  devPwHash = prefs.getString("devpw", "");
   simInit();
 
   BLEDevice::init("indygo-gateway");
@@ -973,12 +1294,25 @@ void setup() {
   server.on("/api/v1/filtration", HTTP_PUT, handleFiltrationPut);
   server.on("/api/v1/aux1", HTTP_PUT, []() { handleAuxPut(0); });
   server.on("/api/v1/aux2", HTTP_PUT, []() { handleAuxPut(1); });
+  server.on("/api/v1/dev", HTTP_GET, handleDevStatus);
+  server.on("/api/v1/dev/password", HTTP_PUT, handleDevPassword);
+  server.on("/api/v1/ota", HTTP_POST, otaDone, otaUpload);
+  server.on("/api/v1/dev/ble/connect", HTTP_POST, handleDevBleConnect);
+  server.on("/api/v1/dev/ble/disconnect", HTTP_POST, handleDevBleDisconnect);
+  server.on("/api/v1/dev/ble/services", HTTP_GET, handleDevBleServices);
+  server.on("/api/v1/dev/ble/read", HTTP_POST, handleDevBleRead);
+  server.on("/api/v1/dev/ble/subscribe", HTTP_POST, handleDevBleSubscribe);
+  server.on("/api/v1/dev/ble/write", HTTP_POST, handleDevBleWrite);
+  server.on("/api/v1/dev/ble/write-enable", HTTP_PUT, handleDevBleWriteEnable);
+  server.on("/api/v1/dev/ble/log", HTTP_GET, handleDevBleLog);
   server.on("/api/v1/wifi", HTTP_GET, handleWifiGet);
   server.on("/api/v1/wifi", HTTP_PUT, handleWifiPut);
   server.on("/api/v1/wifi", HTTP_DELETE, handleWifiDelete);
   server.on("/api/v1/wifi/scan", HTTP_POST, handleWifiScanStart);
   server.on("/api/v1/wifi/scan", HTTP_GET, handleWifiScanResults);
   server.onNotFound(handleNotFound);
+  const char *hdrs[] = {"X-Dev-Password"};
+  server.collectHeaders(hdrs, 1);
   server.begin();
 }
 
